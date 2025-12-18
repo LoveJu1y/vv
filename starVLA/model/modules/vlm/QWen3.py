@@ -20,8 +20,8 @@ logger = initialize_overwatch(__name__)
 IGNORE_INDEX = -100
 IMAGE_TOKEN_INDEX = 151655
 VIDEO_TOKEN_INDEX = 151656
-DEFAULT_IMAGE_TOKEN = "<image>"
-DEFAULT_VIDEO_TOKEN = "<video>"
+DEFAULT_IMAGE_TOKEN = "<|image_pad|>"
+DEFAULT_VIDEO_TOKEN = "<|video_pad|>"
 
 # [151936, 153984]
 _ACTION_TOKEN_MIN = 151936 # how can we know this range? --> we has other way for this, but is slower see qwenhelix branch
@@ -304,6 +304,15 @@ class _QWen3_VL_Interface(nn.Module):
                 think_counts,
                 _describe_pixel_values(pixel_values),
             )
+            logger.error(
+                "[forward_latent:%s] Shapes => input_ids=%s attention_mask=%s inputs_embeds=%s pixel_values=%s image_grid_thw=%s",
+                stage,
+                tuple(input_ids.shape) if input_ids is not None else None,
+                tuple(attention_mask.shape) if attention_mask is not None else None,
+                tuple(inputs_embeds.shape),
+                tuple(pixel_values.shape) if pixel_values is not None and hasattr(pixel_values, "shape") else _describe_pixel_values(pixel_values),
+                tuple(image_grid_thw.shape) if image_grid_thw is not None and hasattr(image_grid_thw, "shape") else _describe_pixel_values(image_grid_thw),
+            )
             # Try to decode first sample for inspection
             try:
                 sample_tokens = input_ids[0, : e_idx if e_idx is not None else input_ids.shape[1]].detach().cpu()
@@ -316,16 +325,15 @@ class _QWen3_VL_Interface(nn.Module):
         # If no thinking tokens, skip iterative reasoning
         if max_n_latents == 0:
             logger.info(
-                "[forward_latent] No thinking tokens found (max_n_latents=0), performing single forward pass | "
-                "input_shape=%s pixel_values=%s image_grid_thw=%s",
-                inputs_embeds.shape,
+                "[forward_latent] No thinking tokens found (max_n_latents=0), running normal forward pass | input_ids=%s attention_mask=%s pixel_values=%s",
+                tuple(input_ids.shape),
+                tuple(attention_mask.shape),
                 _describe_pixel_values(pixel_values),
-                _describe_pixel_values(image_grid_thw),
             )
             try:
                 with torch.autocast("cuda", dtype=torch.bfloat16):
                     outputs = self.model(
-                        inputs_embeds=inputs_embeds,
+                        input_ids=input_ids,
                         attention_mask=attention_mask,
                         pixel_values=pixel_values,
                         image_grid_thw=image_grid_thw,
@@ -627,7 +635,8 @@ class _QWen3_VL_Interface(nn.Module):
                 prompt = CoT_prompt.replace("{instruction}", instruction)
                 
             else:
-                prompt = instruction
+                base_prompt = "Robot task reasoning: first output the target bbox, then list the subtask, then generate the motion reasoning. Instruction:"
+                prompt = f'{base_prompt} {instruction}'
 
             content.append({"type": "text", "text": prompt})
             msg = [{"role": "user", "content": content}]
@@ -656,6 +665,44 @@ class _QWen3_VL_Interface(nn.Module):
         # Extract per-sample sequences (keep full length, alignment will handle padding)
         input_ids_list = [ids_cpu[b] for b in range(B)]
         attention_mask_list = [mask_cpu[b] for b in range(B)]
+
+        # Debug: verify image_pad counts per sample before alignment
+        image_pad_token_id = 151655
+        if image_pad_token_id is None:
+            try:
+                image_pad_token_id = self.processor.tokenizer.convert_tokens_to_ids("<|image_pad|>")
+                self._image_pad_token_id = image_pad_token_id
+            except Exception:
+                image_pad_token_id = None
+
+        if image_pad_token_id is not None:
+            for sample_idx, (ids, sample_imgs, instruction) in enumerate(zip(input_ids_list, images, instructions)):
+                pad_count = int((ids == image_pad_token_id).sum().item())
+                expected_count = len(sample_imgs) * 64  # each image contributes 64 vision patches at 224x224
+                if pad_count != expected_count:
+                    logger.warning(
+                        "[build_qwenvl_inputs_with_alignment] image_pad mismatch on sample %d: count=%d expected=%d | "
+                        "instruction=%r input_ids_shape=%s attention_mask_shape=%s",
+                        sample_idx,
+                        pad_count,
+                        expected_count,
+                        instruction,
+                        tuple(ids.shape),
+                        tuple(attention_mask_list[sample_idx].shape),
+                    )
+                    try:
+                        decoded = self.processor.tokenizer.decode(ids, skip_special_tokens=False)
+                        logger.warning(
+                            "[build_qwenvl_inputs_with_alignment] sample %d decoded (truncated): %.200s",
+                            sample_idx,
+                            decoded,
+                        )
+                    except Exception as decode_exc:
+                        logger.warning(
+                            "[build_qwenvl_inputs_with_alignment] failed to decode sample %d: %s",
+                            sample_idx,
+                            decode_exc,
+                        )
         
         # Align thinking tokens (position_ids will be computed by Qwen3-VL internally)
         input_ids_list, attention_mask_list = self._align_thinking_tokens(
@@ -852,7 +899,7 @@ class _QWen3_VL_Interface(nn.Module):
             # Priority 2: Stage 0 fallback - try @ delimiter
             # Encode " @ " (with spaces) to get token sequence
             try:
-                at_token_ids = self.processor.tokenizer.encode(" @ ", add_special_tokens=False)
+                at_token_ids = self.processor.tokenizer.encode(" @", add_special_tokens=False)
             except Exception as e:
                 logger.warning(f"Failed to encode @ delimiter: {e}")
                 at_token_ids = []

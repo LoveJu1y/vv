@@ -5,7 +5,7 @@
 目标：在 **不修改训练 pipeline** 的前提下，在 `starVLA/data_gen` 目录实现一套两阶段的离线标注脚本：
 
 - 阶段一（CPU）：几何分段 `bridge_geometric_segmentation.py`
-- 阶段二（GPU）：VLM 推理 + GroundingDINO `bridge_vlm_grounding.py`
+- 阶段二（GPU）：VLM 推理 + SAM3 BBox 检测 `bridge_vlm_sam3.py`
 
 最终生成：
 
@@ -21,8 +21,8 @@
   - 负责：几何分段（基于 state/XYZ + gripper 的物理子任务划分）。
   - 输出：`intermediate/geo_segments.jsonl`
 
-- `starVLA/data_gen/bridge_vlm_grounding.py`
-  - 负责：VLM + GroundingDINO，多模态 CoT 与 BBox 标注。
+- `starVLA/data_gen/bridge_vlm_sam3.py`
+  - 负责：VLM + SAM3 BBox 检测，多模态 CoT 与 BBox 标注。
   - 输入：`intermediate/geo_segments.jsonl`
   - 输出：`annotations/segmentation_full_v1.jsonl`
 
@@ -224,7 +224,7 @@
 
 ---
 
-## 3. 阶段二：bridge_vlm_grounding.py（VLM + GroundingDINO）
+## 3. 阶段二：bridge_vlm_sam3.py（VLM + SAM3 BBox）
 
 ### 3.1 入口与配置
 
@@ -237,17 +237,17 @@
   - VLM 相关配置：
     - 模型类型（本地 Qwen2-VL/Qwen3-VL 或 API）
     - checkpoint/host 地址
-  - GroundingDINO 相关配置：
-    - 模型权重路径
+  - SAM3 相关配置：
+    - 模型权重路径/模型名
     - detection 阈值等
   - `--max_episodes`：调试时限制处理 episode 数量
 
 - 初始化：
   - 加载 VLM 模型；
-  - 加载 GroundingDINO 模型。
+  - 加载 SAM3 检测模型（BBox 输出，不使用 mask）。
 
 - 循环读取 `geo_segments.jsonl` 中的 episode 记录：
-  - 调用 `annotate_episode_with_vlm_grounding(...)`；
+  - 调用 `annotate_episode_with_vlm_and_sam3(...)`；
   - 将结果写入 `segmentation_full_v1.jsonl`。
 
 ### 3.2 任务指令与图像读取
@@ -294,36 +294,36 @@
 - 若 VLM 输出中未能可靠抽出物体名称：
   - 设 `target_object_ref = "unknown"` 或留空，并保留 COT。
 
-### 3.5 GroundingDINO 视觉定位
+### 3.5 SAM3 BBox 检测
 
-函数：`run_grounding_dino(image: Image, object_ref: str) -> dict | None`
+函数：`run_sam3_detection(image: Image, object_ref: str) -> dict | None`
 
-- 将 `object_ref` 作为 GroundingDINO 的 text prompt；
-- 得到若干候选框及其置信度；
+- 将 `object_ref` 作为 SAM3 的文本 prompt；
+- 得到若干候选框及其置信度（SAM3 自带 detection head 输出 BBox）；
 - 选择最高置信度框，构造：
   - `bbox_2d: [ymin, xmin, ymax, xmax]`（像素坐标）
   - `confidence: float`
 
 - 若置信度低于阈值或无候选：
-  - 返回 `None`，表示本段 Grounding 失败。
+  - 返回 `None`，表示本段检测失败。
 
-### 3.6 Segment 多模态标注融合
+### 3.6 Segment 多模态标注融合（VLM + SAM3）
 
-函数：`annotate_segment_with_vlm_and_grounding(segment: dict, episode_index: int, root: Path, instruction: str, vlm_model, grounding_model) -> dict`
+函数：`annotate_segment_with_vlm_and_sam3(segment: dict, episode_index: int, root: Path, instruction: str, vlm_model, sam3_model) -> dict`
 
 - 步骤：
   1. 使用 `select_keyframe_for_segment` 获取 `frame_idx`；
   2. 利用 `load_frame_image` 读取该帧图像；
   3. 调用 `run_vlm_reasoning`：
      - 获得 `segment_cot`, `target_object_ref`；
-  4. 调用 `run_grounding_dino`（若 `target_object_ref` 非空）：
+  4. 调用 `run_sam3_detection`（若 `target_object_ref` 非空）：
      - 获得 `bbox_2d`, `confidence`；
   5. 在原 segment dict 上新增字段：
      - `"target_object_ref"`
      - `"grounding": { "bbox_2d": ..., "confidence": ..., "frame_idx": ... }`
      - `"segment_cot"`
 
-- 对 Grounding 失败的情况：
+- 对检测失败的情况：
   - `grounding` 可以为 `null` 或只包含 `frame_idx` 与 `confidence=0.0`。
 
 ### 3.7 稠密 BBox 生成
@@ -343,7 +343,7 @@
 
 ### 3.8 单 episode 的整体处理
 
-函数：`annotate_episode_with_vlm_grounding(geo_episode: dict, root: Path, vlm_model, grounding_model) -> dict`
+函数：`annotate_episode_with_vlm_and_sam3(geo_episode: dict, root: Path, vlm_model, sam3_model) -> dict`
 
 - 输入：
   - 来自 `geo_segments.jsonl` 的一条记录：
@@ -355,7 +355,7 @@
 - 步骤：
   1. 读取任务指令：`instruction = load_task_instruction(root, episode_index)`。
   2. 遍历 `cycles` 与其中的 `segments`：
-     - 对每个 segment 调用 `annotate_segment_with_vlm_and_grounding`。
+     - 对每个 segment 调用 `annotate_segment_with_vlm_and_sam3`。
   3. 根据更新后的 `cycles` 调用 `build_dense_active_bbox`：
      - 得到 `dense_labels.active_bbox`。
   4. 构造最终 episode 级输出字典：
@@ -366,7 +366,7 @@
        - `dense_labels.subtask_id`, `dense_labels.cycle_id`
      - 新增全局字段：
        - `reasoning_model`：如 `"qwen2-vl-7b"`
-       - `grounding_model`：如 `"grounding-dino-swin-t"`
+       - `grounding_model`：如 `"sam3"`
        - `dense_labels.active_bbox`
 
 在 `main()` 中：
@@ -380,8 +380,8 @@
 
 - **鲁棒性**
   - B-spline 失败或轨迹过短时，要自动退化为简单的基于 gripper + 速度的分段。
-  - VLM 无法可靠抽取物体名时，将 `target_object_ref` 记为 `"unknown"` 并跳过 Grounding。
-  - GroundingDINO 检测不到时，对应段的 bbox 允许为 `null`。
+  - VLM 无法可靠抽取物体名时，将 `target_object_ref` 记为 `"unknown"` 并跳过 SAM3 检测。
+  - SAM3 检测不到时，对应段的 bbox 允许为 `null`。
 
 - **子任务映射表**
   - 建议在一个统一模块/常量中定义：
@@ -393,4 +393,3 @@
   - 阶段二可先用 `--max_episodes` 只处理少数 episodes 做可视化检查，再全量跑。
 
 以上即为基于 v4.1 设计的完整代码结构与模块划分计划，后续具体实现时可严格按本文件中的函数划分与输入输出约定进行。 
-

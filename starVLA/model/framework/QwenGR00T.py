@@ -71,6 +71,8 @@ class Qwen_GR00T(baseframework):
         
         # Training stage control: "reasoning_only", "action_only", or "full"
         self.training_stage = config.framework.get("training_stage", "full")
+        self.use_reasoning_summary = getattr(self.config.framework.action_model, "use_reasoning_summary", False)
+        self.use_reasoning_film = getattr(self.config.framework.action_model, "use_reasoning_film", False)
         
         # Apply parameter freezing based on training stage
         if self.training_stage == "reasoning_only":
@@ -104,6 +106,11 @@ class Qwen_GR00T(baseframework):
         qwen_inputs = self.qwen_vl_interface.build_qwenvl_inputs(
             images=batch_images, 
             instructions=instructions
+        )
+        reasoning_mask = (
+            self._extract_reasoning_mask(qwen_inputs)
+            if self.training_stage != "reasoning_only"
+            else None
         )
         
         # Check if iterative implicit reasoning is enabled
@@ -151,39 +158,44 @@ class Qwen_GR00T(baseframework):
 
         elif self.training_stage == "action_only":
             # action_only mode: Only train action head, VLM is frozen
-        with torch.autocast("cuda", dtype=torch.float32):
-            # 标签对齐：取最后 chunk_len 段
-            actions = torch.tensor(
-                np.array(actions), device=last_hidden.device, dtype=last_hidden.dtype
-            )  # [B, T_full, action_dim]
-            actions_target = actions[:, -(self.future_action_window_size+1):, :]  # (B, chunk_len, action_dim)
+            with torch.autocast("cuda", dtype=torch.float32):
+                # 标签对齐：取最后 chunk_len 段
+                actions = torch.tensor(
+                    np.array(actions), device=last_hidden.device, dtype=last_hidden.dtype
+                )  # [B, T_full, action_dim]
+                actions_target = actions[:, -(self.future_action_window_size+1):, :]  # (B, chunk_len, action_dim)
 
-            repeated_diffusion_steps = (
-                self.config.trainer.get("repeated_diffusion_steps", 4) if self.config and self.config.trainer else 4
-            )
-            actions_target_repeated = actions_target.repeat(repeated_diffusion_steps, 1, 1)
-            last_hidden_repeated = last_hidden.repeat(repeated_diffusion_steps, 1, 1)
-            
-            state_repeated = None
-            if state is not None:
-                state = torch.tensor(
-                    np.array(state), device=last_hidden.device, dtype=last_hidden.dtype
-                )  # [B, state_dim] or [B, 1, state_dim]
+                repeated_diffusion_steps = (
+                    self.config.trainer.get("repeated_diffusion_steps", 4) if self.config and self.config.trainer else 4
+                )
+                actions_target_repeated = actions_target.repeat(repeated_diffusion_steps, 1, 1)
+                last_hidden_repeated = last_hidden.repeat(repeated_diffusion_steps, 1, 1)
                 
-                # Ensure state is 3D: [B, 1, state_dim]
-                if state.ndim == 2:
-                    state = state.unsqueeze(1)  # [B, state_dim] -> [B, 1, state_dim]
-                
-                state_repeated = state.repeat(repeated_diffusion_steps, 1, 1)  # [B*repeated_diffusion_steps, 1, state_dim]
+                state_repeated = None
+                if state is not None:
+                    state = torch.tensor(
+                        np.array(state), device=last_hidden.device, dtype=last_hidden.dtype
+                    )  # [B, state_dim] or [B, 1, state_dim]
+                    
+                    # Ensure state is 3D: [B, 1, state_dim]
+                    if state.ndim == 2:
+                        state = state.unsqueeze(1)  # [B, state_dim] -> [B, 1, state_dim]
+                    
+                    state_repeated = state.repeat(repeated_diffusion_steps, 1, 1)  # [B*repeated_diffusion_steps, 1, state_dim]
 
-                action_loss = self.action_model(last_hidden_repeated, actions_target_repeated, state_repeated)
+                reasoning_mask_repeated = self._repeat_reasoning_mask(reasoning_mask, repeated_diffusion_steps)
+                action_loss = self.action_model(
+                    last_hidden_repeated,
+                    actions_target_repeated,
+                    state_repeated,
+                    reasoning_mask=reasoning_mask_repeated,
+                )
 
-            result["action_loss"] = action_loss
-            result["total_loss"] = action_loss  # Only action loss
-            if vlm_loss is not None:
-                result["vlm_loss"] = vlm_loss
-            return result
-            
+                result["action_loss"] = action_loss
+                result["total_loss"] = action_loss  # Only action loss
+                if vlm_loss is not None:
+                    result["vlm_loss"] = vlm_loss
+                return result
         else:
             # full mode: Train both VLM and action head
             with torch.autocast("cuda", dtype=torch.float32):
@@ -211,13 +223,19 @@ class Qwen_GR00T(baseframework):
                     
                     state_repeated = state.repeat(repeated_diffusion_steps, 1, 1)  # [B*repeated_diffusion_steps, 1, state_dim]
 
-                action_loss = self.action_model(last_hidden_repeated, actions_target_repeated, state_repeated)
+                reasoning_mask_repeated = self._repeat_reasoning_mask(reasoning_mask, repeated_diffusion_steps)
+                action_loss = self.action_model(
+                    last_hidden_repeated,
+                    actions_target_repeated,
+                    state_repeated,
+                    reasoning_mask=reasoning_mask_repeated,
+                )
 
             result["action_loss"] = action_loss
             
             # Combine with VLM loss if available
         if vlm_loss is not None:
-            vlm_loss_weight = self.config.framework.get("latent_reasoning", {}).get("vlm_loss_weight", 0.1)
+            vlm_loss_weight = self.config.framework.get("latent_reasoning", {}).get("vlm_loss_weight", 0.5)
             result["vlm_loss"] = vlm_loss
             result["total_loss"] = action_loss + vlm_loss_weight * vlm_loss
         else:
@@ -263,6 +281,7 @@ class Qwen_GR00T(baseframework):
     
         # Step 1: QWenVL input format
         qwen_inputs = self.qwen_vl_interface.build_qwenvl_inputs(images=batch_images, instructions=instructions)
+        reasoning_mask = self._extract_reasoning_mask(qwen_inputs)
         
         # Step 2: Choose forward method based on use_iterative_forward flag
         if use_iterative_forward and hasattr(self.qwen_vl_interface, 'forward_latent'):
@@ -284,24 +303,49 @@ class Qwen_GR00T(baseframework):
                     logger.info(f"[ECOT] Completed {num_passes} reasoning passes in predict_action")
         else:
             # Baseline mode: Normal forward pass (no iterative reasoning)
-        with torch.autocast("cuda", dtype=torch.bfloat16):
-            qwenvl_outputs = self.qwen_vl_interface(
-                **qwen_inputs,
-                output_attentions=False,
-                output_hidden_states=True,
-                return_dict=True,
-            )
-            # last_hidden_state: [B, seq_len, H]
-            last_hidden = qwenvl_outputs.hidden_states[-1]   # [B, L, H]
+            with torch.autocast("cuda", dtype=torch.bfloat16):
+                qwenvl_outputs = self.qwen_vl_interface(
+                    **qwen_inputs,
+                    output_attentions=False,
+                    output_hidden_states=True,
+                    return_dict=True,
+                )
+                # last_hidden_state: [B, seq_len, H]
+                last_hidden = qwenvl_outputs.hidden_states[-1]   # [B, L, H]
 
         state = torch.from_numpy(np.array(state)).to(last_hidden.device, dtype=last_hidden.dtype) if state is not None else None
         # Step 4: Action Expert Forward and Loss
         with torch.autocast("cuda", dtype=torch.float32):
-            pred_actions = self.action_model.predict_action(last_hidden, state)  # (B, chunk_len, action_dim)
+            pred_actions = self.action_model.predict_action(
+                last_hidden,
+                state,
+                reasoning_mask=reasoning_mask,
+            )  # (B, chunk_len, action_dim)
 
         normalized_actions = pred_actions.detach().cpu().numpy()
         return {"normalized_actions": normalized_actions}
 
+    def _extract_reasoning_mask(self, qwen_inputs) -> Optional[torch.Tensor]:
+        if not (self.use_reasoning_summary or self.use_reasoning_film):
+            return None
+        thinking_token_id = getattr(self.qwen_vl_interface, "thinking_token_id", None)
+        if thinking_token_id is None:
+            return None
+        input_ids = qwen_inputs.get("input_ids", None)
+        if input_ids is None:
+            return None
+        mask = (input_ids == thinking_token_id)
+        if not torch.any(mask):
+            return None
+        return mask
+
+    @staticmethod
+    def _repeat_reasoning_mask(mask: Optional[torch.Tensor], repeat_steps: int) -> Optional[torch.Tensor]:
+        if mask is None:
+            return None
+        if repeat_steps <= 1:
+            return mask
+        return mask.repeat(repeat_steps, 1)
 
 
 if __name__ == "__main__":

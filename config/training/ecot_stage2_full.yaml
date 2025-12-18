@@ -38,7 +38,7 @@ datasets:
     # ECoT RLDS 专属配置
     ecot:
       # 数据路径
-      data_root_dir: "/share/project/emllm_mnt.1d/mnt/sfs/baaiei/jyShi/rt_newData"  # RLDS 数据根目录
+      data_root_dir: "/share/project/lvjing/datas/"  # RLDS 数据根目录
       data_mix: "bridge"  # OXE 数据混合名称（如 "bridge", "bridge_rt_1" 等）
       
       # 阶段设置（Stage Configuration）

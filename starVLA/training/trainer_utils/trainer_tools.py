@@ -191,8 +191,9 @@ class TrainerUtils:
                     print(f"⚠️ module path does not exist, cannot freeze: {path}")
                     continue
 
-        dist.barrier()  # synchronize when distributed training
-        if dist.get_rank == 0:
+        if dist.is_available() and dist.is_initialized():
+            dist.barrier()  # synchronize when distributed training
+        if not dist.is_available() or not dist.is_initialized() or dist.get_rank() == 0:
             print(f"🔒 Frozen modules with re pattern: {frozen}")
         return model
 

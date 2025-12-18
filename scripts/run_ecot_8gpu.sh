@@ -30,7 +30,7 @@ export WANDB_BASE_URL="https://api.bandw.top"
 
 # 基础配置
 
-scheduled_stage=0  # scheduled_stage 需要数字
+scheduled_stage=1  # scheduled_stage 需要数字
 max_train_steps=30000
 num_gpus=1
 
@@ -47,7 +47,7 @@ TRAIN_CONFIG_ARGS=(
   --trainer.max_train_steps ${max_train_steps}
   --trainer.save_interval 5000
   --trainer.logging_frequency 10
-  --trainer.eval_interval 500
+  --trainer.eval_interval 500000
   --trainer.learning_rate.base 0.00001
   --trainer.gradient_accumulation_steps 1
   --framework.qwenvl.model_max_length 2048

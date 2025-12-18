@@ -107,7 +107,23 @@ class baseframework(PreTrainedModel):
             if unexpected_keys:
                 logger.warning(f"Unexpected keys in state_dict: {unexpected_keys}")
 
-            raise e
+            optional_prefixes = (
+                "action_model.reasoning_film.",
+                "action_model.reasoning_summarizer.",
+            )
+
+            def _all_optional(keys) -> bool:
+                return all(any(k.startswith(p) for p in optional_prefixes) for k in keys)
+
+            # Backward-compat: allow newly-added optional modules to be randomly initialized.
+            if _all_optional(missing_keys) and _all_optional(unexpected_keys):
+                logger.warning(
+                    "[*] Falling back to strict=False because mismatched keys are limited to optional modules: %s",
+                    optional_prefixes,
+                )
+                FrameworkModel.load_state_dict(model_state_dict, strict=False)
+            else:
+                raise e
 
         # **ensure model is on GPU**
         FrameworkModel = FrameworkModel

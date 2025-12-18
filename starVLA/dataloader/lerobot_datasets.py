@@ -15,6 +15,9 @@ def make_LeRobotSingleDataset(
     data_name: str,
     robot_type: str,  # 新增参数
     delete_pause_frame: bool = False,
+    bridge_annotation_cfg: dict | None = None,
+    bridge_filter_cfg: dict | None = None,
+    bridge_reasoning_cfg: dict | None = None,
 ) -> LeRobotSingleDataset:
     """
     Make a LeRobotSingleDataset object.
@@ -42,6 +45,9 @@ def make_LeRobotSingleDataset(
         embodiment_tag=embodiment_tag,
         video_backend="torchvision_av",
         delete_pause_frame=delete_pause_frame,
+        bridge_annotation_cfg=bridge_annotation_cfg,
+        bridge_filter_cfg=bridge_filter_cfg,
+        bridge_reasoning_cfg=bridge_reasoning_cfg,
     )
 
 def get_vla_dataset(
@@ -58,6 +64,17 @@ def get_vla_dataset(
     """
     data_root_dir = data_cfg.data_root_dir
     data_mix = data_cfg.data_mix
+    bridge_annotations_cfg = getattr(data_cfg, "bridge_annotations", None)
+    bridge_reasoning_cfg = getattr(data_cfg, "bridge_reasoning", None)
+    if bridge_annotations_cfg is not None:
+        bridge_annotations_cfg = OmegaConf.to_container(bridge_annotations_cfg, resolve=True)
+        bridge_filters_cfg = None
+        if isinstance(bridge_annotations_cfg, dict):
+            bridge_filters_cfg = bridge_annotations_cfg.get("filters")
+    else:
+        bridge_filters_cfg = None
+    if bridge_reasoning_cfg is not None:
+        bridge_reasoning_cfg = OmegaConf.to_container(bridge_reasoning_cfg, resolve=True)
     mixture_spec = DATASET_NAMED_MIXTURES[data_mix]
     included_datasets, filtered_mixture_spec = set(), []
     for d_name, d_weight, robot_type in mixture_spec:  
@@ -71,7 +88,18 @@ def get_vla_dataset(
 
     dataset_mixture = []
     for d_name, d_weight, robot_type in filtered_mixture_spec:
-        dataset_mixture.append((make_LeRobotSingleDataset(Path(data_root_dir), d_name, robot_type, delete_pause_frame=delete_pause_frame), d_weight))
+        dataset_mixture.append((
+            make_LeRobotSingleDataset(
+                Path(data_root_dir),
+                d_name,
+                robot_type,
+                delete_pause_frame=delete_pause_frame,
+                bridge_annotation_cfg=bridge_annotations_cfg,
+                bridge_filter_cfg=bridge_filters_cfg,
+                bridge_reasoning_cfg=bridge_reasoning_cfg,
+            ),
+            d_weight,
+        ))
 
     return LeRobotMixtureDataset(
         dataset_mixture,

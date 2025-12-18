@@ -392,19 +392,18 @@
 #         plt.legend()
 #         plt.savefig(save_path)
 from collections import deque
-from typing import Optional, Sequence
+from typing import Dict, Optional, Sequence
+import copy
 import os
 import cv2 as cv
 import matplotlib.pyplot as plt
 import numpy as np
+from pathlib import Path
 
 from transforms3d.euler import euler2axangle
 from deployment.model_server.tools.websocket_policy_client import WebsocketClientPolicy
 
 from examples.SimplerEnv.adaptive_ensemble import AdaptiveEnsembler
-from typing import Dict
-import numpy as np
-from pathlib import Path
 
 
 # 独立的配置读取函数，避免导入训练模块
@@ -454,6 +453,41 @@ def read_config_simple(checkpoint_path):
     return config, norm_stats
 
 
+BRIDGE_REASONING_DEFAULTS = {
+    "stage": 4,
+    "include_bbox": True,
+    "include_action_tokens": False,
+    "tag2think_count": {"BBOX": 1, "SUBTASK": 1, "REASON": 1, "ACTION": 1},
+}
+
+BRIDGE_BASE_PROMPT = (
+    "Robot task reasoning: first output the target bbox, then list the subtask, then generate the motion reasoning. Instruction:"
+)
+
+
+def extract_bridge_reasoning_settings(config: Optional[dict]) -> dict:
+    settings = copy.deepcopy(BRIDGE_REASONING_DEFAULTS)
+    if not config:
+        return settings
+    try:
+        datasets_cfg = config.get("datasets", {})
+        vla_cfg = datasets_cfg.get("vla_data", {})
+        bridge_cfg = vla_cfg.get("bridge_reasoning", {})
+        if bridge_cfg:
+            settings["stage"] = int(bridge_cfg.get("stage", settings["stage"]))
+            settings["include_bbox"] = bridge_cfg.get("include_bbox", settings["include_bbox"])
+            settings["include_action_tokens"] = bridge_cfg.get(
+                "include_action_tokens", settings["include_action_tokens"]
+            )
+            tag2think = bridge_cfg.get("tag2think_count")
+            if tag2think:
+                merged = settings["tag2think_count"]
+                merged.update({k.upper(): int(v) for k, v in tag2think.items()})
+    except Exception:
+        pass
+    return settings
+
+
 class M1Inference:
     def __init__(
         self,
@@ -480,26 +514,32 @@ class M1Inference:
         self.client = WebsocketClientPolicy(host, port)
 
         os.environ["TOKENIZERS_PARALLELISM"] = "false"
-        
+
+        self.policy_config = None
+        self.norm_stats = None
+        try:
+            self.policy_config, self.norm_stats = read_config_simple(policy_ckpt_path)
+        except FileNotFoundError as exc:
+            raise RuntimeError(f"Failed to load checkpoint metadata from {policy_ckpt_path}") from exc
+
         # 如果没有指定 unnorm_key，尝试从 dataset_statistics.json 自动检测
         if unnorm_key is None:
             try:
-                _, norm_stats = read_config_simple(policy_ckpt_path)
-                available_keys = list(norm_stats.keys())
-                
+                available_keys = list(self.norm_stats.keys())
+
                 # 根据 policy_setup 映射到实际的 key
                 key_mapping = {
                     "widowx_bridge": ["oxe_bridge", "bridge_data_v2", "bridge"],
                     "google_robot": ["oxe_rt1", "rt1", "fractal"],
                 }
-                
+
                 # 查找匹配的 key
                 for candidate in key_mapping.get(policy_setup, []):
                     if candidate in available_keys:
                         unnorm_key = candidate
                         print(f"✅ Auto-detected unnorm_key: {unnorm_key} from available keys: {available_keys}")
                         break
-                
+
                 # 如果没找到，使用第一个可用的 key
                 if unnorm_key is None and len(available_keys) > 0:
                     unnorm_key = available_keys[0]
@@ -555,36 +595,19 @@ class M1Inference:
             self.action_ensembler = None
         self.num_image_history = 0
 
-        self.action_norm_stats = self.get_action_stats(self.unnorm_key, policy_ckpt_path=policy_ckpt_path)
-        
-        # ECOT (Implicit Reasoning) initialization
-        self.enable_latent_reasoning = enable_latent_reasoning
-        self.thinking_token_count = thinking_token_count
-        
-        if self.enable_latent_reasoning:
-            # Define thinking token strings (must match training config)
-            self.thinking_tokens = {
-                "start": "<|start_of_thinking|>",
-                "thinking": "<|thinking|>",
-                "end": "<|end_of_thinking|>",
-            }
-            
-            # Pre-construct thinking sequence for efficiency
-            # Format: " <|start_of_thinking|> <|thinking|> <|thinking|> ... <|end_of_thinking|>"
-            # 构造 thinking sequence（与训练时格式保持一致，tokens之间无空格）
-            self.thinking_sequence = (
-                f" {self.thinking_tokens['start']}" +
-                self.thinking_tokens['thinking'] * self.thinking_token_count +
-                f"{self.thinking_tokens['end']}"
-            )
-            
-            print(f"[ECOT] Implicit reasoning enabled with {thinking_token_count} thinking tokens")
-            # Token 统计：1 (start) + N (thinking) + 1 (end)
-            print(f"[ECOT] Thinking sequence: {thinking_token_count} x <|thinking|> tokens inserted")
-        else:
-            self.thinking_tokens = None
-            self.thinking_sequence = None
-        
+        self.bridge_reasoning = extract_bridge_reasoning_settings(self.policy_config)
+        stage_requires_latent = self.bridge_reasoning["stage"] >= 2
+        self.enable_latent_reasoning = enable_latent_reasoning or stage_requires_latent
+        if not enable_latent_reasoning and stage_requires_latent:
+            print("[ECOT] Forcing latent reasoning on to match training stage configuration.")
+
+        self.thinking_tokens = {
+            "start": "<|start_of_thinking|>",
+            "thinking": "<|thinking|>",
+            "end": "<|end_of_thinking|>",
+        }
+
+        self.action_norm_stats = self.get_action_stats(self.unnorm_key)
 
     def _add_image_to_history(self, image: np.ndarray) -> None:
         self.image_history.append(image)
@@ -627,13 +650,9 @@ class M1Inference:
 
         image = self._resize_image(image)
         
-        # Construct instruction (with thinking tokens if ECOT is enabled)
-        instruction = self.task_description
-        if self.enable_latent_reasoning:
-            # Add @ delimiter + thinking token sequence
-            # Format: "Instruction @ <|start_of_thinking|> <|thinking|> ... <|end_of_thinking|>"
-            instruction = instruction.strip() + " @ " + self.thinking_sequence.strip()
-        
+        # Construct instruction aligned with training formatter
+        instruction = self._format_instruction_with_reasoning(self.task_description or "")
+
         vla_input = {
             "batch_images": [[image]],
             "instructions": [instruction],  # Extended instruction with thinking tokens (if enabled)
@@ -721,16 +740,50 @@ class M1Inference:
         
         return actions
 
-    @staticmethod
-    def get_action_stats(unnorm_key: str, policy_ckpt_path) -> dict:
+    def get_action_stats(self, unnorm_key: str) -> dict:
         """
-        Duplicate stats accessor (retained for backward compatibility).
+        Fetch action normalization stats from cached dataset_statistics.json content.
         """
-        policy_ckpt_path = Path(policy_ckpt_path)
-        model_config, norm_stats = read_config_simple(policy_ckpt_path)  # 使用简化版读取函数
+        if not self.norm_stats:
+            raise RuntimeError("Normalization statistics not loaded; cannot unnormalize actions.")
+        if unnorm_key not in self.norm_stats:
+            raise KeyError(f"Normalization key '{unnorm_key}' not found. Available: {list(self.norm_stats.keys())}")
+        return self.norm_stats[unnorm_key]["action"]
 
-        # unnorm_key = baseframework._check_unnorm_key(norm_stats, unnorm_key) # 其实也是很环境 specific 的
-        return norm_stats[unnorm_key]["action"]
+    def _format_instruction_with_reasoning(self, instruction: str) -> str:
+        instruction = (instruction or "").strip()
+        prompt = f"{BRIDGE_BASE_PROMPT} {instruction}".strip()
+        if not self.enable_latent_reasoning:
+            return prompt
+
+        thinking_body = self._build_thinking_body()
+        if not thinking_body:
+            return prompt
+
+        span = f"{self.thinking_tokens['start']}{thinking_body}{self.thinking_tokens['end']}"
+        return f"{prompt}. @ {span}"
+
+    def _build_thinking_body(self) -> str:
+        stage = self.bridge_reasoning["stage"]
+        tag_counts = self.bridge_reasoning["tag2think_count"]
+        include_bbox = self.bridge_reasoning.get("include_bbox", True)
+        include_action = self.bridge_reasoning.get("include_action_tokens", False)
+
+        latent_tags = []
+        if stage >= 2 and include_bbox:
+            latent_tags.append("BBOX")
+        if stage >= 3:
+            latent_tags.append("SUBTASK")
+        if stage >= 4:
+            latent_tags.append("REASON")
+        if include_action and stage >= 5:
+            latent_tags.append("ACTION")
+
+        body_parts = []
+        for tag in latent_tags:
+            count = max(1, int(tag_counts.get(tag, 1)))
+            body_parts.append(self.thinking_tokens["thinking"] * count)
+        return "".join(body_parts)
 
 
 

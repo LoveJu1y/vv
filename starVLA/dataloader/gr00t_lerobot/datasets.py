@@ -28,7 +28,7 @@ import hashlib
 import json
 from collections import defaultdict
 from pathlib import Path
-from typing import Sequence
+from typing import Sequence, Dict, Any
 
 import numpy as np
 import pandas as pd
@@ -38,6 +38,8 @@ from tqdm import tqdm
 from PIL import Image
 
 from starVLA.dataloader.gr00t_lerobot.video import get_all_frames, get_frames_by_timestamps
+from starVLA.model.modules.action_model.fast_ActionHeader import Fast_Action_Tokenizer
+from starVLA.dataloader.gr00t_lerobot.bridge_annotations import BridgeAnnotations
 
 from starVLA.dataloader.gr00t_lerobot.embodiment_tags import EmbodimentTag
 from starVLA.dataloader.gr00t_lerobot.schema import (
@@ -60,6 +62,7 @@ LE_ROBOT_STATS_FILENAME = "meta/stats_gr00t.json"
 LE_ROBOT_DATA_FILENAME = "data/*/*.parquet"
 LE_ROBOT_STEPS_FILENAME = "meta/steps.pkl"
 EPSILON = 5e-4
+TASK_INDEX_KEY = "task_index"
 
 def calculate_dataset_statistics(parquet_paths: list[Path]) -> dict:
     """Calculate the dataset statistics of all columns for a list of parquet files."""
@@ -118,6 +121,9 @@ class LeRobotSingleDataset(Dataset):
         video_backend_kwargs: dict | None = None,
         transforms: ComposedModalityTransform | None = None,
         delete_pause_frame: bool = False,
+        bridge_annotation_cfg: dict | None = None,
+        bridge_filter_cfg: dict | None = None,
+        bridge_reasoning_cfg: dict | None = None,
     ):
         """
         Initialize the dataset.
@@ -166,11 +172,112 @@ class LeRobotSingleDataset(Dataset):
         self._trajectory_ids, self._trajectory_lengths = self._get_trajectories()
         self._modality_keys = self._get_modality_keys()
         self._delta_indices = self._get_delta_indices()
-        self._all_steps = self._get_all_steps()
         self.set_transforms_metadata(self.metadata)
-        self.set_epoch(0)
 
+        # Optional: attach BRIDGE-specific auxiliary annotations if available.
+        self.bridge_annotations: BridgeAnnotations | None = None
+        self.bridge_annotation_cfg = bridge_annotation_cfg or {}
+        filters_cfg = bridge_filter_cfg or self.bridge_annotation_cfg.get("filters") if isinstance(self.bridge_annotation_cfg, dict) else None
+        self.bridge_filter_cfg = filters_cfg or {}
+        self.require_cot_episode = bool(self.bridge_filter_cfg.get("require_cot_episode", False))
+        self.require_bbox_episode = bool(self.bridge_filter_cfg.get("require_bbox_episode", False))
+        min_cov = self.bridge_filter_cfg.get("min_episode_bbox_coverage")
+        self.min_episode_bbox_coverage = float(min_cov) if min_cov is not None else None
+        self.require_bbox_step = bool(self.bridge_filter_cfg.get("require_bbox_step", False))
+        def _normalize_task_indices(value):
+            if value is None:
+                return None
+            if isinstance(value, (list, tuple, set)):
+                return {int(v) for v in value}
+            return {int(value)}
+        self.include_task_indices = _normalize_task_indices(self.bridge_filter_cfg.get("include_task_indices"))
+        self.exclude_task_indices = _normalize_task_indices(self.bridge_filter_cfg.get("exclude_task_indices"))
+
+        annotations_dir = self.dataset_path / "annotations"
+        default_cot_file = annotations_dir / "episode_dense_captions_full_ep0-20.jsonl"
+        default_bbox_file = annotations_dir / "episode_sam3_bboxes_final.jsonl"
+        cot_override = (self.bridge_annotation_cfg or {}).get("cot_path") if isinstance(self.bridge_annotation_cfg, dict) else None
+        bbox_override = (self.bridge_annotation_cfg or {}).get("bbox_path") if isinstance(self.bridge_annotation_cfg, dict) else None
+
+        self.steps_cache_override = None
+        if isinstance(self.bridge_annotation_cfg, dict) and self.bridge_annotation_cfg.get("steps_cache_path"):
+            override_path = Path(self.bridge_annotation_cfg["steps_cache_path"])
+            if not override_path.is_absolute():
+                override_path = self.dataset_path / override_path
+            self.steps_cache_override = override_path
+
+        def _resolve_path(path_value, default_path):
+            if path_value is None:
+                return default_path
+            p = Path(path_value)
+            if not p.is_absolute():
+                p = self.dataset_path / p
+            return p
+
+        cot_file = _resolve_path(cot_override, default_cot_file)
+        bbox_file = _resolve_path(bbox_override, default_bbox_file)
+
+        if (cot_file and cot_file.exists()) or (bbox_file and bbox_file.exists()):
+            try:
+                self.bridge_annotations = BridgeAnnotations(
+                    dataset_root=self.dataset_path,
+                    cot_path=cot_file if cot_file and cot_file.exists() else None,
+                    bbox_path=bbox_file if bbox_file and bbox_file.exists() else None,
+                )
+                print(
+                    f"Loaded BridgeAnnotations for dataset `{self.dataset_name}` "
+                    f"(cot={bool(cot_file and cot_file.exists())}, bbox={bool(bbox_file and bbox_file.exists())})"
+                )
+            except Exception as e:
+                print(f"Warning: failed to load BridgeAnnotations for {self.dataset_name}: {e}")
+
+        reasoning_cfg = bridge_reasoning_cfg or {}
+        enable_reasoning = bool(reasoning_cfg.get("enable", False)) if isinstance(reasoning_cfg, dict) else False
+        self.bridge_reasoning_formatter = None
+        self.bridge_reasoning_stage = 0
+        self.include_action_tokens = False
+        if enable_reasoning:
+            from starVLA.dataloader.gr00t_lerobot.bridge_reasoning_formatter import BridgeReasoningFormatter
+
+            stage = int(reasoning_cfg.get("stage", 0)) if isinstance(reasoning_cfg, dict) else 0
+            include_bbox = bool(reasoning_cfg.get("include_bbox", True)) if isinstance(reasoning_cfg, dict) else True
+            include_actions = bool(reasoning_cfg.get("include_action_tokens", True)) if isinstance(reasoning_cfg, dict) else True
+            thinking_token = reasoning_cfg.get("thinking_token", "<|thinking|>") if isinstance(reasoning_cfg, dict) else "<|thinking|>"
+            start_token = reasoning_cfg.get("start_token", "<|start_of_thinking|>") if isinstance(reasoning_cfg, dict) else "<|start_of_thinking|>"
+            end_token = reasoning_cfg.get("end_token", "<|end_of_thinking|>") if isinstance(reasoning_cfg, dict) else "<|end_of_thinking|>"
+            tag2think = reasoning_cfg.get("tag2think_count") if isinstance(reasoning_cfg, dict) else None
+            component_order = reasoning_cfg.get("component_order") if isinstance(reasoning_cfg, dict) else None
+            if tag2think is not None:
+                tag2think = dict(tag2think)
+            if component_order is not None:
+                if isinstance(component_order, str):
+                    component_order = [component_order]
+                component_order = [str(tag) for tag in component_order]
+            self.bridge_reasoning_stage = stage
+            self.bridge_reasoning_formatter = BridgeReasoningFormatter(
+                stage=stage,
+                include_bbox=include_bbox,
+                include_action_tokens=include_actions,
+                thinking_token=thinking_token,
+                start_token=start_token,
+                end_token=end_token,
+                tag2think_count=tag2think,
+                component_order=component_order,
+            )
+            self.include_action_tokens = include_actions and self.bridge_reasoning_formatter is not None
+
+        self._all_steps = self._get_all_steps()
+        self.set_epoch(0)
         print(f"Initialized dataset {self.dataset_name} with {embodiment_tag}")
+
+        # Fast action tokenizer (optional)
+        action_tokenizer_name = self.bridge_annotation_cfg.get("fast_tokenizer_name") if isinstance(self.bridge_annotation_cfg, dict) else None
+        self.fast_action_tokenizer: Fast_Action_Tokenizer | None = None
+        if action_tokenizer_name:
+            try:
+                self.fast_action_tokenizer = Fast_Action_Tokenizer(fast_tokenizer_name=action_tokenizer_name)
+            except Exception as e:
+                print(f"Warning: failed to initialize Fast_Action_Tokenizer: {e}")
 
 
         # Check if the dataset is valid
@@ -394,30 +501,26 @@ class LeRobotSingleDataset(Dataset):
         # Create a hash key based on configuration to ensure cache validity
         config_key = self._get_steps_config_key()
         
-        # Create a unique filename based on config_key
-        steps_filename = f"steps_{config_key}.pkl"
-        # @BUG
-        # fast get static steps @fangjing --> don't use hash to dynamic sample
-        steps_filename =  "steps_data_index.pkl"
-        steps_filename = "steps_332420bad1ab.pkl"
-
-        steps_path = self.dataset_path / "meta" / steps_filename
-        
+        if self.steps_cache_override is not None:
+            steps_path = self.steps_cache_override
+        else:
+            steps_filename = f"steps_{config_key}.pkl"
+            steps_path = self.dataset_path / "meta" / steps_filename
         # Try to load cached steps first
         try:
             if steps_path.exists():
                 with open(steps_path, "rb") as f:
                     cached_data = pickle.load(f)
-                return cached_data["steps"]
-            else:
-                steps_filename = "steps_2d5a34b904d2.pkl"
-                steps_path = self.dataset_path / "meta" / steps_filename
-        
-                with open(steps_path, "rb") as f:
-                    cached_data = pickle.load(f)
-                return cached_data["steps"]
-
-
+                if self.steps_cache_override is not None:
+                    return cached_data["steps"]
+                cached_key = cached_data.get("config_key")
+                if cached_key is None or cached_key != config_key:
+                    print(
+                        f"Cached steps found but config key mismatch "
+                        f"(cached={cached_key}, current={config_key}). Recomputing..."
+                    )
+                else:
+                    return cached_data["steps"]
         except (FileNotFoundError, pickle.PickleError, KeyError) as e:
             print(f"Failed to load cached steps: {e}")
             print("Computing steps from scratch...")
@@ -437,11 +540,14 @@ class LeRobotSingleDataset(Dataset):
             }
             
             # Ensure the meta directory exists
-            steps_path.parent.mkdir(parents=True, exist_ok=True)
-            
-            with open(steps_path, "wb") as f:
-                pickle.dump(cache_data, f, protocol=pickle.HIGHEST_PROTOCOL)
-            print(f"Cached steps saved to {steps_path}")
+            if self.steps_cache_override is None:
+                steps_path.parent.mkdir(parents=True, exist_ok=True)
+                
+                with open(steps_path, "wb") as f:
+                    pickle.dump(cache_data, f, protocol=pickle.HIGHEST_PROTOCOL)
+                print(f"Cached steps saved to {steps_path}")
+            else:
+                print("Steps cache override in use; skipping caching.")
         except Exception as e:
             print(f"Failed to cache steps: {e}")
         
@@ -452,11 +558,21 @@ class LeRobotSingleDataset(Dataset):
         config_dict = {
             "delete_pause_frame": self.delete_pause_frame,
             "dataset_name": self.dataset_name,
+            "require_cot_episode": getattr(self, "require_cot_episode", False),
+            "require_bbox_episode": getattr(self, "require_bbox_episode", False),
+            "min_episode_bbox_coverage": getattr(self, "min_episode_bbox_coverage", None),
+            "require_bbox_step": getattr(self, "require_bbox_step", False),
+            "list_filter":"true",
         }
         # Create a hash of the configuration
         config_str = str(sorted(config_dict.items()))
         return hashlib.md5(config_str.encode()).hexdigest()[:12]  #
 
+    def _bridge_step_has_bbox(self, trajectory_id: int, base_index: int) -> bool:
+        if not (self.bridge_annotations is not None and self.require_bbox_step):
+            return True
+        bbox_info = self.bridge_annotations.get_step_bbox(trajectory_id, base_index)
+        return bbox_info is not None and bbox_info.valid
 
     def _get_all_steps_single_process(self) -> list[tuple[int, int]]:
         """Original single-process implementation as fallback."""
@@ -467,9 +583,43 @@ class LeRobotSingleDataset(Dataset):
         # Check if language modality is configured
         has_language_modality = 'language' in self.modality_keys and len(self.modality_keys['language']) > 0
         
-        for trajectory_id, trajectory_length in tqdm(zip(self.trajectory_ids, self.trajectory_lengths), total=len(self.trajectory_ids), desc="Getting All Step"):
+        bridge_filter_active = self.bridge_annotations is not None and (
+            self.require_cot_episode
+            or self.require_bbox_episode
+            or self.min_episode_bbox_coverage is not None
+            or self.require_bbox_step
+        )
+        task_filter_active = self.include_task_indices is not None or self.exclude_task_indices is not None
+        skipped_bridge_no_cot = 0
+        skipped_bridge_no_bbox = 0
+        skipped_bridge_low_cov = 0
+        skipped_bridge_step_no_bbox = 0
+        skipped_task_include = 0
+        skipped_task_exclude = 0
+
+        for trajectory_id, trajectory_length in tqdm(
+            zip(self.trajectory_ids, self.trajectory_lengths),
+            total=len(self.trajectory_ids),
+            desc="Getting All Step",
+        ):
             data = self.get_trajectory_data(trajectory_id)
             trajectory_skipped = False
+            trajectory_task_index = None
+            if TASK_INDEX_KEY in data.columns and len(data[TASK_INDEX_KEY]) > 0:
+                try:
+                    trajectory_task_index = int(data[TASK_INDEX_KEY].iloc[0])
+                except Exception:
+                    trajectory_task_index = None
+
+            if self.include_task_indices is not None:
+                if trajectory_task_index not in self.include_task_indices:
+                    skipped_task_include += 1
+                    skipped_trajectories += 1
+                    continue
+            if self.exclude_task_indices is not None and trajectory_task_index in self.exclude_task_indices:
+                skipped_task_exclude += 1
+                skipped_trajectories += 1
+                continue
             
             # Check if trajectory has valid language instruction (if language modality is configured)
             if has_language_modality:
@@ -487,8 +637,36 @@ class LeRobotSingleDataset(Dataset):
                     trajectory_skipped = True
                     continue
             
-            if not trajectory_skipped:
-                processed_trajectories += 1
+            if trajectory_skipped:
+                continue
+
+            if self.bridge_annotations is not None:
+                coverage = None
+                if self.require_cot_episode and not self.bridge_annotations.has_cot(trajectory_id):
+                    skipped_bridge_no_cot += 1
+                    skipped_trajectories += 1
+                    trajectory_skipped = True
+                    continue
+                if self.require_bbox_episode or self.min_episode_bbox_coverage is not None:
+                    coverage = self.bridge_annotations.episode_bbox_coverage(trajectory_id)
+                if self.require_bbox_episode:
+                    if coverage is None or coverage <= 0:
+                        skipped_bridge_no_bbox += 1
+                        skipped_trajectories += 1
+                        trajectory_skipped = True
+                        continue
+                if self.min_episode_bbox_coverage is not None:
+                    cov_value = coverage if coverage is not None else 0.0
+                    if cov_value < self.min_episode_bbox_coverage:
+                        skipped_bridge_low_cov += 1
+                        skipped_trajectories += 1
+                        trajectory_skipped = True
+                        continue
+
+            if trajectory_skipped:
+                continue
+
+            processed_trajectories += 1
             
             if self.delete_pause_frame:
                 # Get position and gripper fields based on available columns
@@ -503,13 +681,33 @@ class LeRobotSingleDataset(Dataset):
                     has_gripper_change = gripper_values[base_index] != (previous_gripper if base_index == 0 else gripper_values[base_index-1])
                     
                     if has_translation_change or has_gripper_change:
+                        if self.require_bbox_step and not self._bridge_step_has_bbox(trajectory_id, base_index):
+                            skipped_bridge_step_no_bbox += 1
+                            continue
                         all_steps.append((trajectory_id, base_index))
             else:
                 for base_index in range(trajectory_length):
+                    if self.require_bbox_step and not self._bridge_step_has_bbox(trajectory_id, base_index):
+                        skipped_bridge_step_no_bbox += 1
+                        continue
                     all_steps.append((trajectory_id, base_index))
                     
         # Print summary statistics
         print(f"Single-process summary: Processed {processed_trajectories} trajectories, skipped {skipped_trajectories} empty trajectories")
+        if bridge_filter_active:
+            print(
+                "Bridge filter summary: "
+                f"skip_no_cot={skipped_bridge_no_cot}, "
+                f"skip_no_bbox_episode={skipped_bridge_no_bbox}, "
+                f"skip_low_bbox_cov={skipped_bridge_low_cov}, "
+                f"skip_bbox_steps={skipped_bridge_step_no_bbox}"
+            )
+        if task_filter_active:
+            print(
+                "Task filter summary: "
+                f"skip_not_in_include={skipped_task_include}, "
+                f"skip_in_exclude={skipped_task_exclude}"
+            )
         print(f"Total steps: {len(all_steps)} from {len(self.trajectory_ids)} trajectories")
                    
         return all_steps
@@ -719,26 +917,76 @@ class LeRobotSingleDataset(Dataset):
         """
         trajectory_id, base_index = self.all_steps[index]
         data = self.get_step_data(trajectory_id, base_index)
-        
-        # Process all video keys dynamically
+        return self._build_sample_from_data(data, trajectory_id, base_index)
+
+    def _build_sample_from_data(self, data: dict, trajectory_id: int, base_index: int) -> dict:
+        """
+        Helper shared by both single dataset and mixture dataset to build the final sample dict.
+        """
         images = []
         for video_key in self.modality_keys["video"]:
             image = data[video_key][0]
-            
-            # Apply image cropping if enabled and the video key is base_view
-            # Note: crop_obs_camera functionality has been removed
-            
             image = Image.fromarray(image).resize((224, 224))
             images.append(image)
-        
-        # Get language and action data
+
         language = data[self.modality_keys["language"][0]][0]
         action = []
         for action_key in self.modality_keys["action"]:
             action.append(data[action_key])
         action = np.concatenate(action, axis=1)
-        
-        return dict(action=action, image=images, language=language)
+
+        sample = dict(action=action, image=images, language=language, lang=language)
+
+        if self.fast_action_tokenizer is not None and self.include_action_tokens:
+            try:
+                current_action = action[0] if action.ndim > 1 else action
+                current_action = np.asarray(current_action, dtype=np.float32).reshape(1, -1)
+                vlm_tokens = self.fast_action_tokenizer.encoder_action2vlmtoken([current_action])
+                sample["action_tokens"] = vlm_tokens[0] if vlm_tokens else ""
+            except Exception as e:
+                
+                print(f"Warning: failed to encode action tokens for trajectory {trajectory_id}, step {base_index}: {e}")
+                sample["action_tokens"] = ""
+        else:
+            sample["action_tokens"] = ""
+
+        if self.bridge_annotations is not None:
+            cot = self.bridge_annotations.get_step_cot(trajectory_id, base_index)
+            sample["cot_available"] = cot is not None
+            sample["cot_subtask"] = cot.subtask if cot else ""
+            sample["cot_reasoning"] = cot.reasoning if cot else ""
+            sample["cot_gripper_state"] = cot.gripper_state if cot else None
+
+            bbox_info = self.bridge_annotations.get_step_bbox(trajectory_id, base_index)
+            if bbox_info is not None and bbox_info.valid:
+                bbox = bbox_info.bbox.astype(np.float32)
+                bbox_valid = True
+                bbox_conf = float(bbox_info.confidence) if bbox_info.confidence is not None else 0.0
+            else:
+                bbox = np.zeros(4, dtype=np.float32)
+                bbox_valid = False
+                bbox_conf = 0.0
+            sample["bbox"] = bbox
+            sample["bbox_valid"] = bbox_valid
+            sample["bbox_confidence"] = bbox_conf
+        else:
+            sample["cot_available"] = False
+            sample["cot_subtask"] = ""
+            sample["cot_reasoning"] = ""
+            sample["cot_gripper_state"] = None
+            sample["bbox"] = np.zeros(4, dtype=np.float32)
+            sample["bbox_valid"] = False
+            sample["bbox_confidence"] = 0.0
+
+        if self.bridge_reasoning_formatter is not None:
+            formatted = self.bridge_reasoning_formatter.format(
+                instruction=sample["language"],
+                sample=sample,
+            )
+            sample["language"] = formatted
+            sample["lang"] = formatted
+
+        return sample
 
     def get_step_data(self, trajectory_id: int, base_index: int) -> dict:
         """Get the RAW data for a single step in a trajectory. No transforms are applied.
@@ -1548,27 +1796,10 @@ class LeRobotMixtureDataset(Dataset):
         for attempt in range(max_retries):
             try:
                 dataset, trajectory_name, step = self.sample_step(index)
-                data = dataset.transforms(dataset.get_step_data(trajectory_name, step))
-                
-                # Process all video keys dynamically
-                images = []
-                for video_key in dataset.modality_keys["video"]:
-                    image = data[video_key][0]
-                    
-                    # Apply image cropping if enabled and the video key is base_view
-                    # Note: crop_obs_camera functionality has been removed
-                    
-                    image = Image.fromarray(image).resize((224, 224))
-                    images.append(image)
-                
-                # Get language and action data
-                language = data[dataset.modality_keys["language"][0]][0]
-                action = []
-                for action_key in dataset.modality_keys["action"]:
-                    action.append(data[action_key])
-                action = np.concatenate(action, axis=1).astype(np.float16)
-                
-                return dict(action=action, image=images, lang=language)
+                data = dataset.get_step_data(trajectory_name, step)
+                transformed = dataset.transforms(data)
+                sample = dataset._build_sample_from_data(transformed, trajectory_name, step)
+                return sample
                 
             except Exception as e:
                 last_exception = e
@@ -2058,6 +2289,3 @@ class LeRobotMixtureDataset(Dataset):
                 dataset.set_transforms_metadata(self.merged_metadata[dataset.tag])
         
         print(f"Applied cached statistics for {len(self.merged_metadata)} embodiment tags.")
-
-
-

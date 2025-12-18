@@ -30,7 +30,7 @@ export WANDB_BASE_URL="https://api.bandw.top"
 # ============================================================================
 
 # 基础配置
-RUN_ROOT_DIR="./4B_train_5stages/outputs_3"
+RUN_ROOT_DIR="./4B_train_5stages/outputs_4"
 num_gpus=8
 CONFIG_YAML="config/training/ecot_stage2_full.yaml"
 WANDB_PROJECT="4B_Latent_qwengr00t_5stage_1"
@@ -179,7 +179,7 @@ run_stage() {
     BASE_CONFIG_ARGS=(
         --wandb_project "${WANDB_PROJECT}"
         --wandb_entity "lvj2114-beijing-academy-of-artificial-intelligence"
-        --datasets.vla_data.ecot.data_root_dir "/share/project/emllm_mnt.1d/mnt/sfs/baaiei/jyShi/rt_newData"
+        # --datasets.vla_data.ecot.data_root_dir "/share/project/emllm_mnt.1d/mnt/sfs/baaiei/jyShi/rt_newData"
         --datasets.vla_data.ecot.data_mix "bridge"
     )
     

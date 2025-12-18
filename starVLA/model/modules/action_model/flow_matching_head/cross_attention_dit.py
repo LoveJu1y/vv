@@ -267,6 +267,8 @@ class DiT(ModelMixin, ConfigMixin):
         hidden_states: torch.Tensor,  # Shape: (B, T, D)
         encoder_hidden_states: torch.Tensor,  # Shape: (B, S, D)
         timestep: Optional[torch.LongTensor] = None,
+        modulation: Optional[tuple] = None,  # (scale, shift) for FiLM, shape [B, D]
+        film_first_k: int = 0,
         return_all_hidden_states: bool = False,
     ):
         # Encode timesteps
@@ -280,6 +282,9 @@ class DiT(ModelMixin, ConfigMixin):
 
         # Process through transformer blocks
         for idx, block in enumerate(self.transformer_blocks):
+            if modulation is not None and film_first_k > 0 and idx < film_first_k:
+                scale, shift = modulation
+                hidden_states = hidden_states * (1 + scale[:, None, :]) + shift[:, None, :]
             if idx % 2 == 1 and self.config.interleave_self_attention:
                 hidden_states = block(
                     hidden_states,

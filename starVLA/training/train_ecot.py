@@ -114,7 +114,8 @@ def prepare_data(cfg, accelerator, output_dir) -> Tuple[DataLoader, DataLoader]:
     vla_train_dataloader = build_dataloader(cfg=cfg, dataset_py=dataset_py)
 
     accelerator.dataloader_config.dispatch_batches = False
-    dist.barrier()
+    if dist.is_available() and dist.is_initialized():
+        dist.barrier()
 
     return vla_train_dataloader
 
@@ -218,6 +219,67 @@ def validate_ecot_config(cfg):
     return True
 
 
+def sync_bridge_reasoning_to_framework(cfg):
+    """
+    If bridge_reasoning is enabled and stage >= 2, ensure latent reasoning
+    is enabled in the framework config and thinking tokens are aligned.
+    """
+
+    def _get(obj, key, default=None):
+        if obj is None:
+            return default
+        if isinstance(obj, dict):
+            return obj.get(key, default)
+        return getattr(obj, key, default)
+
+    try:
+        bridge_cfg = cfg.datasets.vla_data.bridge_reasoning
+    except AttributeError:
+        bridge_cfg = None
+    if bridge_cfg is None:
+        return
+
+    enable = _get(bridge_cfg, "enable", False)
+    stage = int(_get(bridge_cfg, "stage", 0) or 0)
+    if not enable or stage < 1:
+        return
+
+    # Ensure latent reasoning is enabled
+    if not hasattr(cfg.framework, "enable_latent_reasoning") or not cfg.framework.enable_latent_reasoning:
+        cfg.framework.enable_latent_reasoning = True
+
+    latent_cfg = getattr(cfg.framework, "latent_reasoning", None)
+    if latent_cfg is None:
+        cfg.framework.latent_reasoning = {}
+        latent_cfg = cfg.framework.latent_reasoning
+
+    def _set_latent(key, value):
+        if isinstance(latent_cfg, dict):
+            latent_cfg[key] = value
+        else:
+            setattr(latent_cfg, key, value)
+
+    thinking_token = _get(bridge_cfg, "thinking_token", _get(latent_cfg, "thinking_token", "<|thinking|>"))
+    start_token = _get(bridge_cfg, "start_token", _get(latent_cfg, "start_of_thinking_token", "<|start_of_thinking|>"))
+    end_token = _get(bridge_cfg, "end_token", _get(latent_cfg, "end_of_thinking_token", "<|end_of_thinking|>"))
+    tag2think = _get(bridge_cfg, "tag2think_count", _get(latent_cfg, "tag2think_count", None))
+
+    _set_latent("thinking_token", thinking_token)
+    _set_latent("start_of_thinking_token", start_token)
+    _set_latent("end_of_thinking_token", end_token)
+    if tag2think is not None:
+        _set_latent("tag2think_count", tag2think)
+
+    # Stage >=1 需要在 "instruction @ ..." 之后计算语言损失；Stage 2+ 额外包含 latent span
+    _set_latent("compute_language_loss", True)
+    vlm_loss_weight = _get(
+        bridge_cfg,
+        "vlm_loss_weight",
+        _get(latent_cfg, "vlm_loss_weight", 0.1),
+    )
+    _set_latent("vlm_loss_weight", vlm_loss_weight)
+
+
 class ECOTVLATrainer(TrainerUtils):
     def __init__(self, cfg, model, vla_train_dataloader, optimizer, lr_scheduler, accelerator):
         self.config = cfg
@@ -230,6 +292,7 @@ class ECOTVLATrainer(TrainerUtils):
         # training status tracking
         self.completed_steps = 0
         self.total_batch_size = self._calculate_total_batch_size()
+        self.min_save_step = getattr(self.config.trainer, "min_save_step", 0)
 
     def prepare_training(self):
         rank = dist.get_rank() if dist.is_initialized() else 0
@@ -407,7 +470,11 @@ class ECOTVLATrainer(TrainerUtils):
             self._log_metrics(step_metrics)
 
             # save checkpoint
-            if self.completed_steps % self.config.trainer.save_interval == 0 and self.completed_steps > 0:
+            if (
+                self.completed_steps % self.config.trainer.save_interval == 0
+                and self.completed_steps >= self.min_save_step
+                and self.completed_steps > 0
+            ):
                 self._save_checkpoint()
 
             # check termination condition
@@ -551,6 +618,9 @@ class ECOTVLATrainer(TrainerUtils):
 def main(cfg) -> None:
     logger.info("ECoT VLA Training :: Warming Up")
 
+    # Sync bridge reasoning config with framework latent reasoning settings
+    sync_bridge_reasoning_to_framework(cfg)
+
     # Validate ECoT configuration
     validate_ecot_config(cfg)
 
@@ -605,4 +675,3 @@ if __name__ == "__main__":
         debugpy.wait_for_client()
 
     main(cfg)
-
