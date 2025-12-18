@@ -46,21 +46,15 @@ REASONING_FILM_HIDDEN="${REASONING_FILM_HIDDEN:-1024}"
 
 TRAINING_STAGE="${TRAINING_STAGE:-full}"
 
-# Action-only run: use stage 4 (all latents) and keep only action tokens
+COT_MODE="${COT_MODE:-implicit}"
+
+# Action-only run: use stage 4 (all latents) and keep only action tokens，默认随 COT_MODE 重写
 SCHEDULED_STAGE="${SCHEDULED_STAGE:-4}"
 
 MIN_SAVE_STEP="${MIN_SAVE_STEP:-15000}"
 LR_BASE="${LR_BASE:-3.0e-5}"
 
 WANDB_PROJECT="${WANDB_PROJECT:-bridge_lerobot_final}"
-
-
-if (( SCHEDULED_STAGE <= 2 )); then
-  DEFAULT_STEPS_CACHE="/share/project/baishuanghao/data/bridge_orig_lerobot/meta/steps_9f926a41b0ba.pkl"
-else
-  DEFAULT_STEPS_CACHE="/share/project/baishuanghao/data/bridge_orig_lerobot/meta/steps_45cc68a6124a.pkl"
-fi
-STEPS_CACHE_PATH="${STEPS_CACHE_PATH:-${DEFAULT_STEPS_CACHE}}"
 
 
 CONFIG_PATH="${CONFIG_PATH:-/share/project/lvjing/starVLA/starVLA/config/training/bridge_lerobot_stage2.yaml}"
@@ -76,6 +70,52 @@ PRETRAINED_CKPT="${PRETRAINED_CKPT:-/share/project/lvjing/starVLA/results/Bridge
 
 RELOAD_MODULES="${RELOAD_MODULES:-qwen_vl_interface}"
 
+# ----------------------------------------------------------------------------
+# 根据 COT_MODE 派生开关
+# ----------------------------------------------------------------------------
+ENABLE_LATENT_REASONING="${ENABLE_LATENT_REASONING:-true}"
+EMIT_THINKING_TOKENS="${EMIT_THINKING_TOKENS:-false}"
+
+case "${COT_MODE}" in
+  none)
+    SCHEDULED_STAGE=0
+    ENABLE_LATENT_REASONING="false"
+    USE_REASONING_FILM="false"
+    USE_REASONING_SUMMARY="false"
+    EMIT_THINKING_TOKENS="false"
+    ;;
+  vlm_seen_no_out)
+    SCHEDULED_STAGE=1
+    ENABLE_LATENT_REASONING="false"
+    USE_REASONING_FILM="false"
+    USE_REASONING_SUMMARY="false"
+    EMIT_THINKING_TOKENS="false"
+    ;;
+  explicit)
+    SCHEDULED_STAGE=1
+    ENABLE_LATENT_REASONING="false"
+    USE_REASONING_FILM="false"
+    USE_REASONING_SUMMARY="false"
+    EMIT_THINKING_TOKENS="false"
+    ;;
+  implicit)
+    SCHEDULED_STAGE=4
+    ENABLE_LATENT_REASONING="true"
+    EMIT_THINKING_TOKENS="false"
+    # USE_REASONING_FILM/SUMMARY 保持外部传入默认
+    ;;
+  *)
+    echo "❌ 无效的 COT_MODE=${COT_MODE}，可选：none/vlm_seen_no_out/explicit/implicit"
+    exit 1
+    ;;
+esac
+
+if (( SCHEDULED_STAGE <= 2 )); then
+  DEFAULT_STEPS_CACHE="/share/project/baishuanghao/data/bridge_orig_lerobot/meta/steps_9f926a41b0ba.pkl"
+else
+  DEFAULT_STEPS_CACHE="/share/project/baishuanghao/data/bridge_orig_lerobot/meta/steps_45cc68a6124a.pkl"
+fi
+STEPS_CACHE_PATH="${STEPS_CACHE_PATH:-${DEFAULT_STEPS_CACHE}}"
 
 OUTPUT_DIR="${RUN_ROOT_DIR}/${RUN_ID}"
 mkdir -p "${OUTPUT_DIR}"
@@ -98,6 +138,9 @@ TRAIN_CONFIG_ARGS=(
   --datasets.vla_data.ecot.scheduled_stage "${SCHEDULED_STAGE}"
   --datasets.vla_data.bridge_reasoning.include_action_tokens "false"
   --datasets.vla_data.bridge_annotations.steps_cache_path "${STEPS_CACHE_PATH}"
+  --framework.cot_mode "${COT_MODE}"
+  --framework.enable_latent_reasoning "${ENABLE_LATENT_REASONING}"
+  --framework.emit_thinking_tokens "${EMIT_THINKING_TOKENS}"
   --framework.action_model.diffusion_model_cfg.dropout "${DIFFUSION_MODEL_DROPOUT}"
   --framework.action_model.use_reasoning_film "${USE_REASONING_FILM}"
   --framework.action_model.reasoning_film_first_k "${REASONING_FILM_FIRST_K}"

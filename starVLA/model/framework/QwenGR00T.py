@@ -114,8 +114,16 @@ class Qwen_GR00T(baseframework):
         )
         
         # Check if iterative implicit reasoning is enabled
+        cot_mode = getattr(self.config.framework, "cot_mode", "implicit")
         enable_latent_reasoning = self.config.framework.get("enable_latent_reasoning", False)
-        use_iterative_forward = enable_latent_reasoning and hasattr(self.qwen_vl_interface, 'forward_latent')
+        use_iterative_forward = (
+            cot_mode == "implicit"
+            and enable_latent_reasoning
+            and hasattr(self.qwen_vl_interface, "forward_latent")
+        )
+        if cot_mode == "explicit":
+            # 显式 CoT：纯文本 forward，全量 hidden 进 cross-attn，不依赖 latent
+            reasoning_mask = None
         
         if use_iterative_forward:
             # Step 2: Iterative forward with KV-Cache for implicit reasoning

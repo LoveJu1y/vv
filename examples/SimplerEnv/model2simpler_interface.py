@@ -395,6 +395,7 @@ from collections import deque
 from typing import Dict, Optional, Sequence
 import copy
 import os
+import time
 import cv2 as cv
 import matplotlib.pyplot as plt
 import numpy as np
@@ -508,6 +509,10 @@ class M1Inference:
         # ECOT (Implicit Reasoning) parameters
         enable_latent_reasoning: bool = False,
         thinking_token_count: int = 4,
+        cot_mode: str = "implicit",
+        think_max_len: int = 64,
+        think_temp: float = 0.1,
+        think_topp: float = 0.9,
     ) -> None:
         
         # build client to connect server policy
@@ -597,15 +602,38 @@ class M1Inference:
 
         self.bridge_reasoning = extract_bridge_reasoning_settings(self.policy_config)
         stage_requires_latent = self.bridge_reasoning["stage"] >= 2
-        self.enable_latent_reasoning = enable_latent_reasoning or stage_requires_latent
-        if not enable_latent_reasoning and stage_requires_latent:
-            print("[ECOT] Forcing latent reasoning on to match training stage configuration.")
+        self.cot_mode = (cot_mode or "implicit").lower()
+        self.think_max_len = think_max_len
+        self.think_temp = think_temp
+        self.think_topp = think_topp
+
+        # 根据 cot_mode 派生开关（显式关闭 latent；隐式开启）
+        if self.cot_mode == "implicit":
+            self.enable_latent_reasoning = True
+            self.emit_thinking_tokens = False
+            self.use_iterative_forward = True
+        elif self.cot_mode == "explicit":
+            self.enable_latent_reasoning = False
+            self.emit_thinking_tokens = True
+            self.use_iterative_forward = False
+        else:  # none / vlm_seen_no_out / fallback
+            self.enable_latent_reasoning = False
+            self.emit_thinking_tokens = False
+            self.use_iterative_forward = False
+
+        # 若 stage 需求与模式冲突，仅告警提示
+        if stage_requires_latent and not self.enable_latent_reasoning:
+            print(f"[ECOT] Warning: training stage={self.bridge_reasoning['stage']} expects latent reasoning "
+                  f"but cot_mode={self.cot_mode} disables it.")
+
 
         self.thinking_tokens = {
             "start": "<|start_of_thinking|>",
             "thinking": "<|thinking|>",
             "end": "<|end_of_thinking|>",
         }
+        self.thinking_gen_times: list[float] = []
+        self.action_infer_times: list[float] = []
 
         self.action_norm_stats = self.get_action_stats(self.unnorm_key)
 
@@ -650,8 +678,12 @@ class M1Inference:
 
         image = self._resize_image(image)
         
-        # Construct instruction aligned with training formatter
-        instruction = self._format_instruction_with_reasoning(self.task_description or "")
+        # Construct instruction aligned with mode
+        if self.cot_mode in ("implicit", "explicit"):
+            instruction = self._format_instruction_with_reasoning(self.task_description or "")
+        else:
+            instruction = self.task_description or ""
+        use_iterative = self.use_iterative_forward if self.cot_mode == "implicit" else False
 
         vla_input = {
             "batch_images": [[image]],
@@ -661,12 +693,23 @@ class M1Inference:
             "cfg_scale": self.cfg_scale,
             "use_ddim": self.use_ddim,
             "num_ddim_steps": self.num_ddim_steps,
-            "use_iterative_forward": self.enable_latent_reasoning,  # Key flag for forward_latent
+            "use_iterative_forward": use_iterative,  # Only implicit uses forward_latent
+            "cot_mode": self.cot_mode,
+            "emit_thinking_tokens": self.emit_thinking_tokens,
+            "think_max_len": self.think_max_len,
+            "think_temp": self.think_temp,
+            "think_topp": self.think_topp,
         }
         
+        t0 = time.perf_counter()
         response = self.client.infer(vla_input)
+        t1 = time.perf_counter()
         
         
+        thinking_time = response.get("data", {}).get("thinking_gen_time", 0)
+        self.thinking_gen_times.append(thinking_time)
+        self.action_infer_times.append(max(t1 - t0 - thinking_time, 0))
+
         # unnormalize the action
         normalized_actions = response["data"]["normalized_actions"] # B, chunk, D        
         normalized_actions = normalized_actions[0]

@@ -45,6 +45,8 @@ from starVLA.training.trainer_utils.trainer_tools import normalize_dotlist_args
 from starVLA.model.framework import build_framework
 from starVLA.training.trainer_utils.trainer_tools import TrainerUtils
 from starVLA.training.trainer_utils.trainer_tools import build_param_lr_groups
+from starVLA.training.trainer_utils.cot_mode_utils import parse_cot_mode, derive_flags_from_mode
+
 
 deepspeed_plugin = DeepSpeedPlugin()
 accelerator = Accelerator(deepspeed_plugin=deepspeed_plugin)
@@ -100,6 +102,11 @@ def prepare_data(cfg, accelerator, output_dir) -> Tuple[DataLoader, DataLoader]:
     """prepare training data"""
     # VLA data loader
     # Safely extract data_mix for logging (could be in ecot.* or vla_data.*)
+    cot_mode = getattr(getattr(cfg, "framework", {}), "cot_mode", "implicit")
+    mode_flags = getattr(getattr(cfg, "framework", {}), "cot_mode_flags", {}) or {}
+    generate_thinking = mode_flags.get("generate_thinking", cot_mode in ("explicit", "implicit"))
+    reasoning_stage = getattr(cfg.datasets.vla_data.bridge_reasoning, "stage", "unknown")
+
     dataset_py = cfg.datasets.vla_data.dataset_py
     try:
         # Try to get data_mix from vla_data (LeRobot format)
@@ -110,7 +117,20 @@ def prepare_data(cfg, accelerator, output_dir) -> Tuple[DataLoader, DataLoader]:
             data_mix = cfg.datasets.vla_data.ecot.data_mix
         except (AttributeError, KeyError):
             data_mix = "unknown"
-    logger.info(f"Creating VLA Dataset with dataset_py=`{dataset_py}`, data_mix=`{data_mix}`")
+    logger.info(
+        "Creating VLA Dataset with dataset_py=`%s`, data_mix=`%s`, cot_mode=`%s`, stage=`%s`, generate_thinking=%s",
+        dataset_py,
+        data_mix,
+        cot_mode,
+        reasoning_stage,
+        generate_thinking,
+    )
+    if generate_thinking and isinstance(reasoning_stage, int) and reasoning_stage < 1:
+        logger.warning(
+            "cot_mode=%s 需要 reasoning 数据，但当前 stage=%s 可能缺少 reasoning 标注，请检查配置/数据混合。",
+            cot_mode,
+            reasoning_stage,
+        )
     vla_train_dataloader = build_dataloader(cfg=cfg, dataset_py=dataset_py)
 
     accelerator.dataloader_config.dispatch_batches = False
@@ -617,7 +637,18 @@ class ECOTVLATrainer(TrainerUtils):
 
 def main(cfg) -> None:
     logger.info("ECoT VLA Training :: Warming Up")
-
+    
+    cot_mode = parse_cot_mode(cfg)
+    mode_flags = derive_flags_from_mode(cot_mode)
+    
+    # 注入派生配置到 cfg（保持向后兼容）
+    cfg.framework.enable_latent_reasoning = mode_flags["enable_latent_reasoning"]
+    cfg.framework.emit_thinking_tokens = mode_flags.get("emit_thinking_tokens", False)
+    cfg.framework.cot_mode_flags = mode_flags  # 方便下游数据/日志使用
+    cfg.datasets.vla_data.bridge_reasoning.stage = mode_flags["reasoning_stage"]
+    cfg.datasets.vla_data.ecot.scheduled_stage = mode_flags["reasoning_stage"]
+    
+    logger.info(f"[CotMode] mode={cot_mode.value}, flags={mode_flags}")
     # Sync bridge reasoning config with framework latent reasoning settings
     sync_bridge_reasoning_to_framework(cfg)
 

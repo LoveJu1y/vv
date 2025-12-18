@@ -46,6 +46,13 @@ def get_args():
         help="Obtain image observation from this camera for policy input. None = default",
     )
     parser.add_argument("--action-scale", type=float, default=1.0)
+    parser.add_argument(
+        "--cot-mode",
+        type=str,
+        default="implicit",
+        choices=["none", "vlm_seen_no_out", "explicit", "implicit"],
+        help="CoT/latent reasoning mode. Default implicit (backward compatible).",
+    )
 
     parser.add_argument("--control-freq", type=int, default=3)
     parser.add_argument("--sim-freq", type=int, default=513)
@@ -130,6 +137,24 @@ def get_args():
         type=int,
         default=4,
         help="Number of thinking tokens to insert (must match training config). Default: 4"
+    )
+    parser.add_argument(
+        "--think-max-len",
+        type=int,
+        default=64,
+        help="Max thinking tokens length for explicit/implicit generation."
+    )
+    parser.add_argument(
+        "--think-temp",
+        type=float,
+        default=0.7,
+        help="Sampling temperature for thinking generation."
+    )
+    parser.add_argument(
+        "--think-topp",
+        type=float,
+        default=0.9,
+        help="Top-p for thinking generation."
     )
 
 

@@ -39,7 +39,11 @@ if __name__ == "__main__":
         action_scale=args.action_scale,
         cfg_scale=1.5,                 # cfg from 1.5 to 7 also performs well
         enable_latent_reasoning=args.enable_latent_reasoning,
-        thinking_token_count=args.thinking_token_count
+        thinking_token_count=args.thinking_token_count,
+        cot_mode=getattr(args, "cot_mode", "implicit"),
+        think_max_len=getattr(args, "think_max_len", 64),
+        think_temp=getattr(args, "think_temp", 0.1),
+        think_topp=getattr(args, "think_topp", 0.9),
         # action_ensemble=False,         # 禁用 action ensemble
     )
 
