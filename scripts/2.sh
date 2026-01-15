@@ -77,8 +77,8 @@ declare -A STAGE_VLM_LOSS_WEIGHT=(
 )
 IMG_NEXT_LOSS_WEIGHT_STAGE1="${IMG_NEXT_LOSS_WEIGHT_STAGE1:-0.1}"
 IMG_NEXT_LOSS_WEIGHT_STAGE2="${IMG_NEXT_LOSS_WEIGHT_STAGE2:-0.1}"
-IMG_NEXT_LOSS_WEIGHT_STAGE3="${IMG_NEXT_LOSS_WEIGHT_STAGE3:-0.2}"
-IMG_NEXT_LOSS_WEIGHT_STAGE4="${IMG_NEXT_LOSS_WEIGHT_STAGE4:-0.2}"
+IMG_NEXT_LOSS_WEIGHT_STAGE3="${IMG_NEXT_LOSS_WEIGHT_STAGE3:-0.1}"
+IMG_NEXT_LOSS_WEIGHT_STAGE4="${IMG_NEXT_LOSS_WEIGHT_STAGE4:-0.1}"
 declare -A STAGE_IMG_NEXT_LOSS_WEIGHT=(
   [1]="${IMG_NEXT_LOSS_WEIGHT_STAGE1}"
   [2]="${IMG_NEXT_LOSS_WEIGHT_STAGE2}"
@@ -95,7 +95,7 @@ declare -A STAGE_MAX_STEPS=(
   [1]=10000
   [2]=5000
   [3]=5000
-  [4]=10000
+  [4]=5000
 )
 declare -A STAGE_SAVE_INTERVAL=(
   [1]=10000
@@ -171,7 +171,7 @@ run_stage() {
     --datasets.vla_data.per_device_batch_size "${per_device_batch}"
     --datasets.vla_data.bridge_reasoning.stage "${bridge_stage}"
     --datasets.vla_data.ecot.scheduled_stage "${scheduled_stage}"
-    --datasets.vla_data.bridge_reasoning.include_action_tokens "true"
+    --datasets.vla_data.bridge_reasoning.include_action_tokens "false"
     --datasets.vla_data.bridge_reasoning.component_order "${component_order}"
     --datasets.vla_data.bridge_annotations.steps_cache_path "${steps_cache_path}"
     --framework.action_model.use_reasoning_film "${USE_REASONING_FILM}"

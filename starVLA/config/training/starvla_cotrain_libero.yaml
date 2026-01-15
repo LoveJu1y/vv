@@ -71,6 +71,9 @@ datasets:
     per_device_batch_size: 16
     load_all_data_for_training: true
     obs: ["image_0"]
+    bridge_annotations:
+      # Optional: enable action -> <robot_action_*> token string conversion (uses local HF cache if set).
+      fast_tokenizer_name: "physical-intelligence/fast"
 
 
 trainer:

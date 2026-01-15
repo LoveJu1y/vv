@@ -199,12 +199,24 @@ class LeRobotSingleDataset(Dataset):
         cot_override = (self.bridge_annotation_cfg or {}).get("cot_path") if isinstance(self.bridge_annotation_cfg, dict) else None
         bbox_override = (self.bridge_annotation_cfg or {}).get("bbox_path") if isinstance(self.bridge_annotation_cfg, dict) else None
 
-        self.steps_cache_override = None
+        self.steps_cache_override: Path | None = None
+        self.steps_cache_override_is_dir: bool = False
         if isinstance(self.bridge_annotation_cfg, dict) and self.bridge_annotation_cfg.get("steps_cache_path"):
             override_path = Path(self.bridge_annotation_cfg["steps_cache_path"])
             if not override_path.is_absolute():
                 override_path = self.dataset_path / override_path
             self.steps_cache_override = override_path
+            # Allow using a directory for multi-dataset mixtures:
+            # - If a directory is provided, we will write one cache per dataset/config_key under it.
+            # - If a file is provided, we preserve the historical "force this cache file" behavior.
+            self.steps_cache_override_is_dir = self.steps_cache_override.suffix == ""
+        # By default, an override path is treated as "read-only": existing caches are loaded,
+        # but missing caches are not written. This keeps backward-compat behavior.
+        # Set bridge_annotations.write_steps_cache=true to allow writing the computed cache to
+        # the override path when it does not exist.
+        self.write_steps_cache_override = bool(
+            self.bridge_annotation_cfg.get("write_steps_cache", False)
+        ) if isinstance(self.bridge_annotation_cfg, dict) else False
 
         def _resolve_path(path_value, default_path):
             if path_value is None:
@@ -242,29 +254,46 @@ class LeRobotSingleDataset(Dataset):
             stage = int(reasoning_cfg.get("stage", 0)) if isinstance(reasoning_cfg, dict) else 0
             include_bbox = bool(reasoning_cfg.get("include_bbox", True)) if isinstance(reasoning_cfg, dict) else True
             include_actions = bool(reasoning_cfg.get("include_action_tokens", True)) if isinstance(reasoning_cfg, dict) else True
+            include_img_next = bool(reasoning_cfg.get("include_img_next", True)) if isinstance(reasoning_cfg, dict) else True
             thinking_token = reasoning_cfg.get("thinking_token", "<|thinking|>") if isinstance(reasoning_cfg, dict) else "<|thinking|>"
             start_token = reasoning_cfg.get("start_token", "<|start_of_thinking|>") if isinstance(reasoning_cfg, dict) else "<|start_of_thinking|>"
             end_token = reasoning_cfg.get("end_token", "<|end_of_thinking|>") if isinstance(reasoning_cfg, dict) else "<|end_of_thinking|>"
+            img_next_token = reasoning_cfg.get("img_next_token", "<img_next>") if isinstance(reasoning_cfg, dict) else "<img_next>"
+            img_next_count = int(reasoning_cfg.get("img_next_count", 16)) if isinstance(reasoning_cfg, dict) else 16
             tag2think = reasoning_cfg.get("tag2think_count") if isinstance(reasoning_cfg, dict) else None
             component_order = reasoning_cfg.get("component_order") if isinstance(reasoning_cfg, dict) else None
             if tag2think is not None:
                 tag2think = dict(tag2think)
             if component_order is not None:
+                # Accept both YAML list form and CLI comma-separated string form.
+                # Example CLI: --datasets.vla_data.bridge_reasoning.component_order "SUBTASK,BBOX,REASON"
                 if isinstance(component_order, str):
-                    component_order = [component_order]
-                component_order = [str(tag) for tag in component_order]
+                    component_order = [t.strip() for t in component_order.split(",") if t.strip()]
+                else:
+                    normalized_tags = []
+                    for tag in component_order:
+                        tag_str = str(tag)
+                        if "," in tag_str:
+                            normalized_tags.extend([t.strip() for t in tag_str.split(",") if t.strip()])
+                        else:
+                            normalized_tags.append(tag_str.strip())
+                    component_order = normalized_tags
             self.bridge_reasoning_stage = stage
             self.bridge_reasoning_formatter = BridgeReasoningFormatter(
                 stage=stage,
                 include_bbox=include_bbox,
                 include_action_tokens=include_actions,
+                include_img_next=include_img_next,
                 thinking_token=thinking_token,
                 start_token=start_token,
                 end_token=end_token,
+                img_next_token=img_next_token,
+                img_next_count=img_next_count,
                 tag2think_count=tag2think,
                 component_order=component_order,
             )
-            self.include_action_tokens = include_actions and self.bridge_reasoning_formatter is not None
+            # Action tokens are produced as a separate field (not embedded into the formatted text).
+            self.include_action_tokens = include_actions
 
         self._all_steps = self._get_all_steps()
         self.set_epoch(0)
@@ -502,7 +531,12 @@ class LeRobotSingleDataset(Dataset):
         config_key = self._get_steps_config_key()
         
         if self.steps_cache_override is not None:
-            steps_path = self.steps_cache_override
+            if self.steps_cache_override_is_dir:
+                # Avoid collisions across datasets when using a shared cache directory.
+                steps_filename = f"steps_{self.dataset_name}_{config_key}.pkl"
+                steps_path = self.steps_cache_override / steps_filename
+            else:
+                steps_path = self.steps_cache_override
         else:
             steps_filename = f"steps_{config_key}.pkl"
             steps_path = self.dataset_path / "meta" / steps_filename
@@ -540,9 +574,10 @@ class LeRobotSingleDataset(Dataset):
             }
             
             # Ensure the meta directory exists
-            if self.steps_cache_override is None:
+            should_write = (self.steps_cache_override is None) or self.write_steps_cache_override
+            if should_write:
                 steps_path.parent.mkdir(parents=True, exist_ok=True)
-                
+
                 with open(steps_path, "wb") as f:
                     pickle.dump(cache_data, f, protocol=pickle.HIGHEST_PROTOCOL)
                 print(f"Cached steps saved to {steps_path}")
@@ -923,11 +958,28 @@ class LeRobotSingleDataset(Dataset):
         """
         Helper shared by both single dataset and mixture dataset to build the final sample dict.
         """
-        images = []
+        images: list[Image.Image] = []
+        images_next: list[Image.Image] = []
+
+        target_size = (224, 224)
+        fallback = False
+
         for video_key in self.modality_keys["video"]:
-            image = data[video_key][0]
-            image = Image.fromarray(image).resize((224, 224))
-            images.append(image)
+            cur_frame_arr = data[video_key][0]
+            cur_frame = Image.fromarray(cur_frame_arr).resize(target_size)
+            images.append(cur_frame)
+
+            sub_key = video_key.replace("video.", "")
+            next_key = f"video_next.{sub_key}"
+            if next_key in data:
+                nxt_frame_arr = data[next_key][0]
+            else:
+                nxt_frame_arr = cur_frame_arr
+                fallback = True
+            nxt_frame = Image.fromarray(nxt_frame_arr).resize(target_size)
+            images_next.append(nxt_frame)
+            if np.array_equal(nxt_frame_arr, cur_frame_arr):
+                fallback = True
 
         language = data[self.modality_keys["language"][0]][0]
         action = []
@@ -935,7 +987,14 @@ class LeRobotSingleDataset(Dataset):
             action.append(data[action_key])
         action = np.concatenate(action, axis=1)
 
-        sample = dict(action=action, image=images, language=language, lang=language)
+        sample = dict(
+            action=action,
+            image=images,
+            image_next=images_next,
+            image_next_fallback=fallback,
+            language=language,
+            lang=language,
+        )
 
         if self.fast_action_tokenizer is not None and self.include_action_tokens:
             try:
@@ -969,6 +1028,19 @@ class LeRobotSingleDataset(Dataset):
             sample["bbox"] = bbox
             sample["bbox_valid"] = bbox_valid
             sample["bbox_confidence"] = bbox_conf
+
+            bbox2 = np.zeros(4, dtype=np.float32)
+            bbox2_valid = False
+            bbox2_conf = 0.0
+            if hasattr(self.bridge_annotations, "get_step_bbox2"):
+                bbox2_info = self.bridge_annotations.get_step_bbox2(trajectory_id, base_index)  # type: ignore[attr-defined]
+                if bbox2_info is not None and bbox2_info.valid:
+                    bbox2 = bbox2_info.bbox.astype(np.float32)
+                    bbox2_valid = True
+                    bbox2_conf = float(bbox2_info.confidence) if bbox2_info.confidence is not None else 0.0
+            sample["bbox2"] = bbox2
+            sample["bbox2_valid"] = bbox2_valid
+            sample["bbox2_confidence"] = bbox2_conf
         else:
             sample["cot_available"] = False
             sample["cot_subtask"] = ""
@@ -977,6 +1049,9 @@ class LeRobotSingleDataset(Dataset):
             sample["bbox"] = np.zeros(4, dtype=np.float32)
             sample["bbox_valid"] = False
             sample["bbox_confidence"] = 0.0
+            sample["bbox2"] = np.zeros(4, dtype=np.float32)
+            sample["bbox2_valid"] = False
+            sample["bbox2_confidence"] = 0.0
 
         if self.bridge_reasoning_formatter is not None:
             formatted = self.bridge_reasoning_formatter.format(
@@ -1015,11 +1090,31 @@ class LeRobotSingleDataset(Dataset):
             }
         """
         data = {}
-        # Get the data for all modalities
         self.curr_traj_data = self.get_trajectory_data(trajectory_id)
-        # TODO @JinhuiYE The logic below is poorly implemented. Data reading should be directly based on curr_traj_data.
+        self.curr_traj_id = trajectory_id
+        trajectory_index = self.get_trajectory_index(trajectory_id)
+        traj_len = self.trajectory_lengths[trajectory_index]
+
+        # Get the data for all modalities
         for modality in self.modality_keys:
-            # Get the data corresponding to each key in the modality
+            if modality == "video":
+                for key in self.modality_keys[modality]:
+                    next_index = min(base_index + 1, traj_len - 1)
+                    if next_index == base_index:
+                        frames = self.get_video_by_step_indices(trajectory_id, key, np.array([base_index]))
+                        data[key] = frames  # [1, H, W, C]
+                        sub_key = key.replace("video.", "")
+                        data[f"video_next.{sub_key}"] = frames  # reuse current as next
+                    else:
+                        frames = self.get_video_by_step_indices(
+                            trajectory_id, key, np.array([base_index, next_index])
+                        )
+                        sub_key = key.replace("video.", "")
+                        data[key] = frames[:1]  # current
+                        data[f"video_next.{sub_key}"] = frames[1:]  # next
+                continue
+
+            # Other modalities: keep original behavior
             for key in self.modality_keys[modality]:
                 data[key] = self.get_data_by_modality(trajectory_id, modality, key, base_index)
         return data
@@ -1149,6 +1244,47 @@ class LeRobotSingleDataset(Dataset):
         assert "timestamp" in self.curr_traj_data.columns, f"No timestamp found in {trajectory_id=}"
         timestamp: np.ndarray = self.curr_traj_data["timestamp"].to_numpy()
         # Get the corresponding video timestamps from the step indices
+        video_timestamp = timestamp[step_indices]
+
+        return get_frames_by_timestamps(
+            video_path.as_posix(),
+            video_timestamp,
+            video_backend=self.video_backend,
+            video_backend_kwargs=self.video_backend_kwargs,
+        )
+
+    def get_video_by_step_indices(
+        self,
+        trajectory_id: int,
+        key: str,
+        step_indices: np.ndarray | list[int],
+    ) -> np.ndarray:
+        """
+        Get video frames for a trajectory at arbitrary step indices (absolute indices in the trajectory).
+
+        This is a lightweight helper used to fetch multiple frames (e.g., current+next) in a single backend call.
+        Returned shape: (len(step_indices), H, W, C).
+        """
+        if isinstance(step_indices, list):
+            step_indices = np.asarray(step_indices, dtype=np.int64)
+        else:
+            step_indices = np.asarray(step_indices, dtype=np.int64)
+
+        # Ensure trajectory data is available for timestamp lookup
+        if self.curr_traj_id != trajectory_id or self.curr_traj_data is None:
+            self.curr_traj_data = self.get_trajectory_data(trajectory_id)
+            self.curr_traj_id = trajectory_id
+
+        trajectory_index = self.get_trajectory_index(trajectory_id)
+        step_indices = np.maximum(step_indices, 0)
+        step_indices = np.minimum(step_indices, self.trajectory_lengths[trajectory_index] - 1)
+
+        assert key.startswith("video."), f"Video key must start with 'video.', got {key}"
+        sub_key = key.replace("video.", "")
+        video_path = self.get_video_path(trajectory_id, sub_key)
+
+        assert "timestamp" in self.curr_traj_data.columns, f"No timestamp found in {trajectory_id=}"
+        timestamp: np.ndarray = self.curr_traj_data["timestamp"].to_numpy()
         video_timestamp = timestamp[step_indices]
 
         return get_frames_by_timestamps(
@@ -1458,6 +1594,36 @@ class CachedLeRobotSingleDataset(LeRobotSingleDataset):
         absolute_indices = self.start_indices[trajectory_index] + step_indices
         return self.cached_frames[key][absolute_indices]
 
+    def get_video_by_step_indices(self, trajectory_id: int, key: str, step_indices: np.ndarray) -> np.ndarray:
+        """
+        Single decode for multiple step indices (e.g., current + next).
+
+        Args:
+            trajectory_id: episode id
+            key: video modality key (e.g., "video.image_0")
+            step_indices: array of step indices to decode
+        """
+        step_indices = np.asarray(step_indices, dtype=np.int64)
+        trajectory_index = self.get_trajectory_index(trajectory_id)
+        max_idx = self.trajectory_lengths[trajectory_index] - 1
+        step_indices = np.clip(step_indices, 0, max_idx)
+
+        assert key.startswith("video."), f"Video key must start with 'video.', got {key}"
+        sub_key = key.replace("video.", "")
+        video_path = self.get_video_path(trajectory_id, sub_key)
+
+        # Use timestamps to fetch frames (works for torchvision_av/pyav)
+        timestamps = self.curr_traj_data["timestamp"].to_numpy()[step_indices]
+        frames = get_frames_by_timestamps(
+            video_path.as_posix(),
+            timestamps,
+            video_backend=self.video_backend,
+            video_backend_kwargs=self.video_backend_kwargs,
+        )
+        assert frames.ndim == 4, f"Expected 4D array, got {frames.shape} array"
+        assert frames.shape[-1] == 3, f"Expected 3 channels, got {frames.shape[-1]} channels"
+        return frames
+
     def get_step_data(self, trajectory_id: int, base_index: int) -> dict:
         """Get the RAW data for a single step. No transforms are applied.
 
@@ -1470,9 +1636,31 @@ class CachedLeRobotSingleDataset(LeRobotSingleDataset):
         """
         data = {}
         self.curr_traj_data = self.get_trajectory_data(trajectory_id)
+        trajectory_index = self.get_trajectory_index(trajectory_id)
+        traj_len = self.trajectory_lengths[trajectory_index]
+
         # Get the data for all modalities
         for modality in self.modality_keys:
-            # Get the data corresponding to each key in the modality
+            # Video modality: decode current + next once
+            if modality == "video":
+                for key in self.modality_keys[modality]:
+                    next_index = min(base_index + 1, traj_len - 1)
+                    if next_index == base_index:
+                        frames = self.get_video_by_step_indices(trajectory_id, key, np.array([base_index]))
+                        data[key] = frames  # shape [1, H, W, C]
+                        sub_key = key.replace("video.", "")
+                        data[f"video_next.{sub_key}"] = frames  # reuse current as next
+                    else:
+                        frames = self.get_video_by_step_indices(
+                            trajectory_id, key, np.array([base_index, next_index])
+                        )
+                        # frames[0]: current, frames[1]: next
+                        sub_key = key.replace("video.", "")
+                        data[key] = frames[:1]
+                        data[f"video_next.{sub_key}"] = frames[1:]
+                continue
+
+            # Other modalities: keep original behavior
             for key in self.modality_keys[modality]:
                 data[key] = self.get_data_by_modality(trajectory_id, modality, key, base_index)
         return data

@@ -139,6 +139,12 @@ def get_args():
         help="Number of thinking tokens to insert (must match training config). Default: 4"
     )
     parser.add_argument(
+        "--img-next-count",
+        type=int,
+        default=16,
+        help="Number of <img_next> tokens to append after reasoning span for implicit mode. Default: 16"
+    )
+    parser.add_argument(
         "--think-max-len",
         type=int,
         default=64,

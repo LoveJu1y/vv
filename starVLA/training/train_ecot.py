@@ -235,6 +235,20 @@ def validate_ecot_config(cfg):
         end_token = latent_cfg.get("end_of_thinking_token", "<|end_of_thinking|>")
         logger.info(f"✅ Thinking tokens: {thinking_token}, {start_token}, {end_token}")
     
+    # 检查 img_next 对齐配置
+    img_next_cfg = cfg.framework.get("img_next", {}) if hasattr(cfg, "framework") else {}
+    if img_next_cfg and img_next_cfg.get("enable", False):
+        res = img_next_cfg.get("res", None)
+        token = img_next_cfg.get("token", "<img_next>")
+        loss_w = img_next_cfg.get("loss_weight", None)
+        use_teacher = img_next_cfg.get("use_teacher", True)
+        if res is not None and res != 112:
+            logger.warning(f"⚠️ img_next.res={res}, 当前实现假设112x112输出16 token，请确保与配置/数据一致")
+        if loss_w is None or loss_w <= 0:
+            logger.warning(f"⚠️ img_next.loss_weight={loss_w} 非正，将导致 loss 不生效")
+        logger.info(f"✅ img_next: token={token}, res={res}, loss_weight={loss_w}, use_teacher={use_teacher}")
+        logger.info("ℹ️ 若样本缺少 image_next，将自动 fallback 且跳过 img_next_loss")
+    
     logger.info("✅ ECoT configuration validation completed")
     return True
 
@@ -313,6 +327,7 @@ class ECOTVLATrainer(TrainerUtils):
         self.completed_steps = 0
         self.total_batch_size = self._calculate_total_batch_size()
         self.min_save_step = getattr(self.config.trainer, "min_save_step", 0)
+        self._img_next_ema_updates = 0
 
     def prepare_training(self):
         rank = dist.get_rank() if dist.is_initialized() else 0
@@ -602,6 +617,21 @@ class ECOTVLATrainer(TrainerUtils):
             self.optimizer.step()
             self.lr_scheduler.step()
 
+            # EMA update for img_next target vision encoder (if enabled)
+            if self.accelerator.sync_gradients:
+                self._img_next_ema_updates += 1
+                if self._img_next_ema_updates % 2 == 0:
+                    try:
+                        qwen_iface = getattr(self.model, "qwen_vl_interface", None)
+                        if (
+                            qwen_iface is not None
+                            and getattr(qwen_iface, "use_img_next_teacher", True)
+                            and hasattr(qwen_iface, "update_img_next_ema")
+                        ):
+                            qwen_iface.update_img_next_ema()
+                    except Exception as e:
+                        logger.warning(f"[img_next_ema] update skipped due to error: {e}")
+
         # Build metrics dictionary
         metrics = {}
         
@@ -645,8 +675,17 @@ def main(cfg) -> None:
     cfg.framework.enable_latent_reasoning = mode_flags["enable_latent_reasoning"]
     cfg.framework.emit_thinking_tokens = mode_flags.get("emit_thinking_tokens", False)
     cfg.framework.cot_mode_flags = mode_flags  # 方便下游数据/日志使用
-    cfg.datasets.vla_data.bridge_reasoning.stage = mode_flags["reasoning_stage"]
-    cfg.datasets.vla_data.ecot.scheduled_stage = mode_flags["reasoning_stage"]
+    training_stage = getattr(cfg.framework, "training_stage", "full")
+    if training_stage in ("reasoning_only", "action_only"):
+        logger.info(
+            "[CotMode] training_stage=%s，保持现有 bridge_reasoning/ecot stage，不覆写（当前为 %s / %s）",
+            training_stage,
+            getattr(cfg.datasets.vla_data.bridge_reasoning, "stage", None),
+            getattr(cfg.datasets.vla_data.ecot, "scheduled_stage", None),
+        )
+    else:
+        cfg.datasets.vla_data.bridge_reasoning.stage = mode_flags["reasoning_stage"]
+        cfg.datasets.vla_data.ecot.scheduled_stage = mode_flags["reasoning_stage"]
     
     logger.info(f"[CotMode] mode={cot_mode.value}, flags={mode_flags}")
     # Sync bridge reasoning config with framework latent reasoning settings

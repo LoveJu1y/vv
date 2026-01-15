@@ -25,14 +25,14 @@ set -euo pipefail
 # export MKL_NUM_THREADS=${MKL_NUM_THREADS:-1}
 # export NUMEXPR_NUM_THREADS=${NUMEXPR_NUM_THREADS:-1}
 
-CKPT_DIR=${1:-/share/project/lvjing/starVLA/results/BridgeFinal_Action/SDPA5_bridge_lerobot_DITB_LR1E-4_LR1E-5_BTS16_60K_FINAL_NO_IMGLOSS__1.3lr/checkpoints}
+CKPT_DIR=${1:-/share/project/lvjing/starVLA/results/BridgeFinal_Action/bridge_explicit_cot_stage1_final/checkpoints}
 MIN_STEP_ARG=${2:-}
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_ROOT="$(cd "${SCRIPT_DIR}/../.." && pwd)"
 cd "${REPO_ROOT}"
-COT_MODE=${COT_MODE:-implicit}
-IMG_NEXT_COUNT=${IMG_NEXT_COUNT:-16}
-MIN_STEP=${MIN_STEP:-57500}
+COT_MODE=${COT_MODE:-explicit}
+IMG_NEXT_COUNT=${IMG_NEXT_COUNT:-0}
+MIN_STEP=${MIN_STEP:-45000}
 MAX_STEP=${MAX_STEP:-}
 
 if [[ -n "${MIN_STEP_ARG}" ]]; then
@@ -64,11 +64,11 @@ BASE_PORT=${BASE_PORT:-25000}
 PORT_STRIDE=${PORT_STRIDE:-500}
 TSET_NUM=${TSET_NUM:-1}
 NUM_EPISODES=${NUM_EPISODES:-24}
-LOG_ROOT=${LOG_ROOT:-${CKPT_DIR}/eval_all_lerobot_latent_parallel}
+LOG_ROOT=${LOG_ROOT:-${CKPT_DIR}/eval_all_explicit_cot_stage1_final_parallel}
 mkdir -p "${LOG_ROOT}"
 
 echo "======================================================"
-echo "📊 Batch Stage-4 Eval"
+echo "📊 Batch Explicit CoT Stage-1 Eval"
 echo "Checkpoint dir : ${CKPT_DIR}"
 echo "GPU list       : ${GPU_LIST}"
 echo "Slots          : ${NUM_SLOTS}"

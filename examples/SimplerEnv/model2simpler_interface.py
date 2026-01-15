@@ -462,7 +462,7 @@ BRIDGE_REASONING_DEFAULTS = {
 }
 
 BRIDGE_BASE_PROMPT = (
-    "Robot task reasoning: first output the target bbox, then list the subtask, then generate the motion reasoning. Instruction:"
+    "You are doing A action in a robot task. First output the target bbox, then list the subtask, then generate the motion reasoning. last, you are required to output the next frame in latent space. Instruction:"
 )
 
 
@@ -509,6 +509,8 @@ class M1Inference:
         # ECOT (Implicit Reasoning) parameters
         enable_latent_reasoning: bool = False,
         thinking_token_count: int = 4,
+        img_next_count: int = 16,
+        img_next_token: str = "<img_next>",
         cot_mode: str = "implicit",
         think_max_len: int = 64,
         think_temp: float = 0.1,
@@ -632,6 +634,8 @@ class M1Inference:
             "thinking": "<|thinking|>",
             "end": "<|end_of_thinking|>",
         }
+        self.img_next_token = img_next_token
+        self.img_next_count = max(0, int(img_next_count))
         self.thinking_gen_times: list[float] = []
         self.action_infer_times: list[float] = []
 
@@ -709,7 +713,7 @@ class M1Inference:
         thinking_time = response.get("data", {}).get("thinking_gen_time", 0)
         self.thinking_gen_times.append(thinking_time)
         self.action_infer_times.append(max(t1 - t0 - thinking_time, 0))
-
+        
         # unnormalize the action
         normalized_actions = response["data"]["normalized_actions"] # B, chunk, D        
         normalized_actions = normalized_actions[0]
@@ -795,7 +799,7 @@ class M1Inference:
 
     def _format_instruction_with_reasoning(self, instruction: str) -> str:
         instruction = (instruction or "").strip()
-        prompt = f"{BRIDGE_BASE_PROMPT} {instruction}".strip()
+        prompt = f"{instruction}".strip()
         if not self.enable_latent_reasoning:
             return prompt
 
@@ -804,7 +808,10 @@ class M1Inference:
             return prompt
 
         span = f"{self.thinking_tokens['start']}{thinking_body}{self.thinking_tokens['end']}"
-        return f"{prompt}. @ {span}"
+        img_next_span = ""
+        if self.img_next_token and self.img_next_count > 0:
+            img_next_span = self.img_next_token * self.img_next_count
+        return f"{prompt}. @ {span} {img_next_span}"
 
     def _build_thinking_body(self) -> str:
         stage = self.bridge_reasoning["stage"]

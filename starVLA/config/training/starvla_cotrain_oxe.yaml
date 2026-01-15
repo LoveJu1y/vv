@@ -73,6 +73,8 @@ datasets:
     bridge_annotations:
       cot_path: null           # 默认为 <dataset_root>/annotations/episode_dense_captions_full_ep0-20.jsonl
       bbox_path: null          # 默认为 <dataset_root>/annotations/episode_sam3_bboxes_final.jsonl
+      # Optional: enable action -> <robot_action_*> token string conversion (uses local HF cache if set).
+      fast_tokenizer_name: "physical-intelligence/fast"
       filters:
         require_cot_episode: false
         require_bbox_episode: false

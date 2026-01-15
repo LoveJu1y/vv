@@ -30,10 +30,17 @@ class M1Inference:
         adaptive_ensemble_alpha = 0.1,
         host="0.0.0.0",
         port=10095,
+        # Latent reasoning (implicit) parameters (Step 3: prompt formatting only)
+        enable_latent_reasoning: bool = False,
+        cot_mode: str = "implicit",
+        thinking_token_count: int = -1,
+        img_next_count: int = -1,
+        # Testing utility: allow init without connecting websocket server
+        connect_server: bool = True,
     ) -> None:
         
         # build client to connect server policy
-        self.client = WebsocketClientPolicy(host, port)
+        self.client = WebsocketClientPolicy(host, port) if connect_server else None
         self.policy_setup = policy_setup
         self.unnorm_key = unnorm_key
 
@@ -58,8 +65,32 @@ class M1Inference:
             self.action_ensembler = None
         self.num_image_history = 0
 
-        self.action_norm_stats = self.get_action_stats(self.unnorm_key, policy_ckpt_path=policy_ckpt_path)
-        self.action_chunk_size = self.get_action_chunk_size(policy_ckpt_path=policy_ckpt_path)
+        # Read config once (avoid repeated disk I/O).
+        model_config, norm_stats = read_mode_config(Path(policy_ckpt_path))
+        self.model_config = model_config
+        self.norm_stats = norm_stats
+
+        # Action unnormalization stats
+        self.unnorm_key = M1Inference._check_unnorm_key(norm_stats, self.unnorm_key)
+        self.action_norm_stats = norm_stats[self.unnorm_key]["action"]
+
+        # Action chunk size (future_action_window_size + 1)
+        self.action_chunk_size = int(model_config["framework"]["action_model"]["future_action_window_size"]) + 1
+
+        # ---- latent reasoning prompt formatting config (strict alignment) ----
+        self.enable_latent_reasoning = bool(enable_latent_reasoning)
+        self.cot_mode = str(cot_mode)
+        self.thinking_token_count = int(thinking_token_count) if int(thinking_token_count) > 0 else 3
+        self.img_next_count = int(img_next_count) if int(img_next_count) > 0 else 16
+
+        latent_cfg = ((model_config.get("framework", {}) or {}).get("latent_reasoning", {}) or {})
+        self._thinking_token = str(latent_cfg.get("thinking_token", "<|thinking|>"))
+        self._start_of_thinking_token = str(latent_cfg.get("start_of_thinking_token", "<|start_of_thinking|>"))
+        self._end_of_thinking_token = str(latent_cfg.get("end_of_thinking_token", "<|end_of_thinking|>"))
+
+        img_next_cfg = (model_config.get("framework", {}) or {}).get("img_next", {}) or {}
+        self._include_img_next = bool(img_next_cfg.get("enable", False))
+        self._img_next_token = str(img_next_cfg.get("token", "<img_next>"))
         
 
     def _add_image_to_history(self, image: np.ndarray) -> None:
@@ -77,6 +108,43 @@ class M1Inference:
         self.gripper_action_repeat = 0
         self.sticky_gripper_action = 0.0
         self.previous_gripper_action = None
+
+    def format_instruction(self, instruction: str) -> str:
+        return self._format_instruction_with_latent(instruction)
+
+    def _thinking_span(self) -> str:
+        """
+        Implicit evaluation uses fixed "stage4" behavior:
+          - Always insert exactly 3 <|thinking|> tokens by default (SUBTASK+BBOX+REASON),
+            unless overridden via `thinking_token_count`.
+          - No extra tags/order/stage logic to keep behavior minimal and aligned.
+        """
+        body = self._thinking_token * int(self.thinking_token_count)
+        return f"{self._start_of_thinking_token}{body}{self._end_of_thinking_token}"
+
+    def _img_next_span(self) -> str:
+        if (not self._include_img_next) or int(self.img_next_count) <= 0:
+            return ""
+        return self._img_next_token * int(self.img_next_count)
+
+    def _format_instruction_with_latent(self, instruction: str) -> str:
+        """
+        Strictly aligned with training formatter and SimplerEnv:
+          - delimiter: ". @ " (dot + space + @ + space)
+          - thinking/img_next spans are pure token concatenation (no spaces inside)
+          - ensure <img_next> is the last segment (no trailing text after it)
+        """
+        prompt = (instruction or "").strip()
+        if (not self.enable_latent_reasoning) or (self.cot_mode != "implicit"):
+            return prompt
+
+        span = self._thinking_span()
+        text = f"{prompt}. @ {span}"
+
+        img_next_span = self._img_next_span()
+        if img_next_span:
+            text = f"{text} {img_next_span}" if text else img_next_span
+        return text.strip()
 
 
     def step(
@@ -100,14 +168,24 @@ class M1Inference:
         # image: Image.Image = Image.fromarray(image)
 
         images = [self._resize_image(image) for image in images]
+        instruction = self._format_instruction_with_latent(self.task_description or "")
         vla_input = {
             "batch_images": [images],
-            "instructions": [self.task_description],
+            "instructions": [instruction],
             "unnorm_key": self.unnorm_key,
             "do_sample": False,
             "use_ddim": self.use_ddim,
             "num_ddim_steps": self.num_ddim_steps,
         }
+
+        # Step 4: Explicitly trigger implicit latent reasoning path on server
+        if self.enable_latent_reasoning and self.cot_mode == "implicit":
+            vla_input["use_iterative_forward"] = True
+            vla_input["cot_mode"] = "implicit"
+            vla_input["emit_thinking_tokens"] = False
+
+        if self.client is None:
+            raise RuntimeError("Websocket client is not initialized (connect_server=False); cannot call step().")
 
 
 
@@ -150,17 +228,15 @@ class M1Inference:
         """
         Duplicate stats accessor (retained for backward compatibility).
         """
-        policy_ckpt_path = Path(policy_ckpt_path)
-        model_config, norm_stats = read_mode_config(policy_ckpt_path)  # read config and norm_stats
+        _, norm_stats = read_mode_config(Path(policy_ckpt_path))  # read config and norm_stats
 
         unnorm_key = M1Inference._check_unnorm_key(norm_stats, unnorm_key)
         return norm_stats[unnorm_key]["action"]
 
     @staticmethod
     def get_action_chunk_size(policy_ckpt_path):
-        model_config, _ = read_mode_config(policy_ckpt_path)  # read config and norm_stats
-        # import ipdb; ipdb.set_trace()
-        return model_config['framework']['action_model']['future_action_window_size'] + 1
+        model_config, _ = read_mode_config(Path(policy_ckpt_path))  # read config and norm_stats
+        return int(model_config["framework"]["action_model"]["future_action_window_size"]) + 1
 
 
     def _resize_image(self, image: np.ndarray) -> np.ndarray:

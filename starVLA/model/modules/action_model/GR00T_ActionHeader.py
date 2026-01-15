@@ -214,6 +214,9 @@ class FlowmatchingActionHeadConfig(PretrainedConfig):
     reasoning_summary_dropout: float = field(
         default=0.1, metadata={"help": "Dropout ratio for the reasoning summarizer."}
     )
+    use_img_next_mlp_compress: bool = field(
+        default=False, metadata={"help": "Compress img_next tokens (16->4) via MLP before DiT cross-attn."}
+    )
 
     def __init__(self, **kwargs):
         super().__init__(**kwargs)
@@ -386,6 +389,8 @@ class FlowmatchingActionHead(nn.Module):
         self.input_embedding_dim = action_model_cfg["input_embedding_dim"]
         diffusion_model_cfg = config.diffusion_model_cfg
         diffusion_model_cfg = {**action_model_cfg, **diffusion_model_cfg}
+        # cross_attention_dim 是 encoder_hidden_states (VLM) 的通道维度
+        self.cross_attention_dim = diffusion_model_cfg.get("cross_attention_dim", self.input_embedding_dim)
         self.model = DiT(**diffusion_model_cfg)
         self.action_dim = config.action_dim
         self.action_horizon = config.future_action_window_size + 1
@@ -420,9 +425,8 @@ class FlowmatchingActionHead(nn.Module):
         self.use_reasoning_film = getattr(config, "use_reasoning_film", False)        # 控制是否启用 FiLM 调制
         # 构建 summarizer：只要 FiLM 或 summary token 任一开启就构建
         if self.use_reasoning_summary or self.use_reasoning_film:
-            cross_attention_dim = diffusion_model_cfg.get("cross_attention_dim", self.input_embedding_dim)
             self.reasoning_summarizer = ReasoningSummarizer(
-                vlm_hidden_dim=cross_attention_dim,
+                vlm_hidden_dim=self.cross_attention_dim,
                 target_dim=self.input_embedding_dim,
                 num_heads=getattr(config, "reasoning_summary_heads", 4),
                 dropout=getattr(config, "reasoning_summary_dropout", 0.1),
@@ -439,6 +443,27 @@ class FlowmatchingActionHead(nn.Module):
         else:
             self.reasoning_film = None
             self.film_first_k = 0
+
+        self.use_img_next_mlp_compress = bool(getattr(config, "use_img_next_mlp_compress", False))
+        if self.use_img_next_mlp_compress:
+            img_next_in_tokens = 16
+            img_next_out_tokens = 4
+            img_next_mlp_ratio = 4
+
+            self.img_next_token_mixer = nn.Linear(img_next_in_tokens, img_next_out_tokens, bias=False)
+            # 注意：这里处理的是 vl_embs（encoder_hidden_states），其 hidden dim 为 cross_attention_dim，
+            # 不能用 action token 的 input_embedding_dim（如 768），否则会出现维度不匹配。
+            self.img_next_ln = nn.LayerNorm(self.cross_attention_dim)
+            mid_dim = self.cross_attention_dim * img_next_mlp_ratio
+            self.img_next_mlp = nn.Sequential(
+                nn.Linear(self.cross_attention_dim, mid_dim),
+                nn.GELU(),
+                nn.Linear(mid_dim, self.cross_attention_dim),
+            )
+        else:
+            self.img_next_token_mixer = None
+            self.img_next_ln = None
+            self.img_next_mlp = None
 
     def sample_time(self, batch_size, device, dtype):
         sample = self.beta_dist.sample([batch_size]).to(device, dtype=dtype)
@@ -483,12 +508,53 @@ class FlowmatchingActionHead(nn.Module):
         shift = shift.to(vl_embs.dtype)
         return scale, shift
 
+    def _maybe_compress_img_next(
+        self,
+        vl_embs: torch.Tensor,
+        img_next_mask: Optional[torch.Tensor],
+    ) -> torch.Tensor:
+        if not self.use_img_next_mlp_compress:
+            return vl_embs
+        if img_next_mask is None or self.img_next_token_mixer is None or self.img_next_ln is None or self.img_next_mlp is None:
+            return vl_embs
+        if img_next_mask.shape != vl_embs.shape[:2]:
+            return vl_embs
+
+        mask = img_next_mask.to(device=vl_embs.device)
+        if mask.dtype != torch.bool:
+            mask = mask.bool()
+
+        B, L, H = vl_embs.shape
+        counts = mask.sum(dim=1)
+        if not torch.all(counts == 16):
+            return vl_embs
+
+        idx2 = mask.nonzero(as_tuple=False)  # [B*16, 2] -> (b, pos)
+        if idx2.shape[0] != B * 16:
+            return vl_embs
+
+        positions = idx2[:, 1].view(B, 16)
+        ref = positions[0]
+        if not torch.all(positions == ref):
+            return vl_embs
+        if not torch.all(ref[1:] == (ref[:-1] + 1)):
+            return vl_embs
+
+        img16 = vl_embs[torch.arange(B, device=vl_embs.device).unsqueeze(1), positions]  # [B, 16, H]
+        mixed = self.img_next_token_mixer(img16.transpose(1, 2)).transpose(1, 2)  # [B, 4, H]
+        mixed = mixed + self.img_next_mlp(self.img_next_ln(mixed))
+
+        start = int(ref[0].item())
+        end = int(ref[-1].item()) + 1
+        return torch.cat([vl_embs[:, :start, :], mixed, vl_embs[:, end:, :]], dim=1)
+
     def forward(
         self,
         vl_embs: torch.Tensor,
         actions: torch.Tensor,
         state: Optional[torch.Tensor] = None,
         reasoning_mask: Optional[torch.Tensor] = None,
+        img_next_mask: Optional[torch.Tensor] = None,
     ):
         """
         vl_embs: shape (B, seq_length, feature_dim)
@@ -511,8 +577,6 @@ class FlowmatchingActionHead(nn.Module):
         
         # embed state
         state_features = self.state_encoder(state) if state is not None else None
-        print(666) if state is not None else "state is None"
-
 
         # Maybe add position embedding.
         if self.config.add_pos_embed:
@@ -522,6 +586,7 @@ class FlowmatchingActionHead(nn.Module):
 
         summary_tokens = self._build_reasoning_summary_tokens(vl_embs, reasoning_mask)
         film_scale, film_shift = self._build_reasoning_modulation(vl_embs, reasoning_mask)
+        vl_embs = self._maybe_compress_img_next(vl_embs, img_next_mask)
         # state and action embedding along sequence dimension.
         future_tokens = self.future_tokens.weight.unsqueeze(0).expand(vl_embs.shape[0], -1, -1)
         seq_chunks = []
@@ -554,6 +619,7 @@ class FlowmatchingActionHead(nn.Module):
         vl_embs: torch.Tensor,
         state: Optional[torch.Tensor] = None,
         reasoning_mask: Optional[torch.Tensor] = None,
+        img_next_mask: Optional[torch.Tensor] = None,
     ) -> torch.Tensor:
         # Set initial actions as the sampled noise.
         batch_size = vl_embs.shape[0]
@@ -571,6 +637,7 @@ class FlowmatchingActionHead(nn.Module):
 
         summary_tokens = self._build_reasoning_summary_tokens(vl_embs, reasoning_mask)
         film_scale, film_shift = self._build_reasoning_modulation(vl_embs, reasoning_mask)
+        vl_embs = self._maybe_compress_img_next(vl_embs, img_next_mask)
         # Run denoising steps.
         for t in range(num_steps):
             t_cont = t / float(num_steps)  # e.g. goes 0, 1/N, 2/N, ...

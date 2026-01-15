@@ -5,6 +5,7 @@
 import asyncio
 import logging
 import traceback
+import time
 
 import websockets.asyncio.server
 import websockets.frames
@@ -104,8 +105,10 @@ class WebsocketPolicyServer:
                     "error": {"message": "Payload must be a dict", "payload_type": str(type(payload))}
                 }
             try:
+                t0 = time.perf_counter()
                 payload["batch_images"] = image_tools.to_pil_preserve(payload["batch_images"])
-                ouput_dict = self._policy.predict_action(**payload)
+                output_dict = self._policy.predict_action(**payload)
+                t1 = time.perf_counter()
             except Exception as e:
                 logging.exception("Policy inference error (request_id=%s)", req_id)
                 logging.exception(e)
@@ -120,7 +123,11 @@ class WebsocketPolicyServer:
                         # "traceback": traceback.format_exc(),
                     },
                 }
-            data = ouput_dict
+            data = output_dict
+            # 追加总耗时，若下游返回 thinking_gen_time 则一并透传
+            data = data or {}
+            data.setdefault("thinking_gen_time", 0)
+            data["total_infer_time"] = t1 - t0
             return {
                 "status": "ok",
                 "ok": True,

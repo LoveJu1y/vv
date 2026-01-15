@@ -24,7 +24,7 @@ export PYTHONPATH="${REPO_ROOT}:${PYTHONPATH:-}"
 export HF_ENDPOINT=https://hf-mirror.com
 export HF_HOME=/share/project/lvjing/starVLA/qwen_cache
 
-CKPT_PATH="${1:-/share/project/lvjing/starVLA/results/BridgeFinal_Action/bridge_lerobot_DITB_LR1E-4_LR1E-5_BTS16_60K_SUM_DR01/checkpoints/steps_60000_pytorch_model.pt}"
+CKPT_PATH="${1:-/share/project/lvjing/starVLA/results/BridgeFinal_Action/bridge_lerobot_DITB_LR1E-4_LR1E-5_BTS16_60K_FINAL_NO_IMGLOSS_DITB/checkpoints/steps_37500_pytorch_model.pt}"
 if [[ -z "${CKPT_PATH}" ]]; then
   echo "❌ 请提供模型路径，例如：bash $0 /share/.../steps_10000_pytorch_model.pt"
   exit 1
@@ -36,7 +36,7 @@ fi
 
 TSET_NUM="${TSET_NUM:-1}"
 NUM_EPISODES="${NUM_EPISODES:-24}"
-BASE_PORT="${BASE_PORT:-10220}"
+BASE_PORT="${BASE_PORT:-10320}"
 GPU_ID="${GPU_ID:-0}"
 
 if [[ -z "${CUDA_VISIBLE_DEVICES:-}" ]]; then
@@ -50,6 +50,10 @@ CKPT_BASENAME="$(basename "${CKPT_PATH%.*}")"
 LOG_DIR="${LOG_DIR:-${CKPT_DIR}/eval_stage4_parallel60000}"
 mkdir -p "${LOG_DIR}"
 
+# 推理模式：none / vlm_seen_no_out / explicit / implicit
+COT_MODE="${COT_MODE:-implicit}"
+IMG_NEXT_COUNT="${IMG_NEXT_COUNT:-16}"
+
 echo "======================================================"
 echo "📊 Stage-4 SimplerEnv 并行评测"
 echo "------------------------------------------------------"
@@ -59,6 +63,7 @@ echo "Repeat     : ${TSET_NUM}"
 echo "Episodes   : ${NUM_EPISODES}"
 echo "Ports      : from ${BASE_PORT}"
 echo "GPU Pool   : ${CUDA_VISIBLE_DEVICES} (${NUM_GPUS} GPUs)"
+echo "CoT Mode   : ${COT_MODE}"
 echo "======================================================"
 
 policyserver_pids=()
@@ -151,10 +156,18 @@ run_task() {
   echo "🧪 任务 ${env_name} | 第 ${run_idx}/${TSET_NUM} 次 | GPU ${gpu_id} | 端口 ${port}"
   echo "   日志: ${log_file}"
 
+  # 是否启用隐式推理（仅 implicit 模式需要）
+  local reasoning_flag=()
+  if [[ "${COT_MODE}" == "implicit" ]]; then
+    reasoning_flag+=(--enable-latent-reasoning --thinking-token-count 3)
+  fi
+
   CUDA_VISIBLE_DEVICES="${gpu_id}" "${sim_python}" examples/SimplerEnv/start_simpler_env.py \
     --port "${port}" \
     --ckpt-path "${CKPT_PATH}" \
     --policy-setup widowx_bridge \
+    --cot-mode "${COT_MODE}" \
+    --img-next-count "${IMG_NEXT_COUNT}" \
     --robot "${robot}" \
     --control-freq 5 \
     --sim-freq 500 \
@@ -168,9 +181,8 @@ run_task() {
     --obj-episode-range 0 "${NUM_EPISODES}" \
     --robot-init-rot-quat-center 0 0 0 1 \
     --robot-init-rot-rpy-range 0 0 1 0 0 1 0 0 1 \
-    --enable-latent-reasoning \
-    --thinking-token-count 3 \
     --logging-dir "${LOG_DIR}" \
+    "${reasoning_flag[@]}" \
     > "${log_file}" 2>&1 &
 
   eval_pids+=("$!")

@@ -133,3 +133,27 @@ results/BridgeFinal_Action/bridge_lerobot_DITB_LR1E-4_LR1E-5_BTS16_60K  yes
 
 这会先跑一个cot0阶段吧！
   
+12.18
+总结一下我现在干了个啥
+今天的主要修改目的在于，希望能跑起来消融实验需要使用的。
+首先，无cot的，直接cot mode改为null，使用stage0的数据（data formater还没改），然后直接送进去训练。推理端已经适配好了，单次forward，直接出action
+
+有cot 的，explicit模式，训练端单次forward，无film，直接训练60k得了。注意的是，以上两者，都从头开始训练。也就是没有pretrained model。不reload任何模块
+
+隐式把版本的，目前我重新训练一个vlm吧，有用，vlm2的逻辑是不对的。一个隐藏的结论是，film层数>=6比较好，且，vlm的lr可以适当大一些！。
+
+今天先把vlm的训练跑起来，因为加入了新的很多超参透传，但总结下来就一个cot mode，它会影响核心参数stage，其他的无所谓。
+
+先跑起来吧，慢慢要成屎山了我说实话，一堆超参透传，cotmode：关键参数/行为受 cot_mode 控制：latent reasoning 开关、thinking token 输出（显式/隐式）、数据阶段选择、推理是否生成 CoT 文本或 latent hidden。
+
+
+1.1
+最近最后一版代码了，加入image loss。现在，我们需要做一些咋isimpler上的消融。要做哪些呢？
+我的变量有：latent reasoning+img next
+1. 完整cot+img
+2. 只有img
+3. 什么都没有的（已经有了）
+4. 仅有cot。（已经有了）
+
+所以现在需要补充一个实验，cot+img和只有img，修改思路很简单，就是，在配置中，吧thinking token换成''，或者能去掉。这个是简单的。
+

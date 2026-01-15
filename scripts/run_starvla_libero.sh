@@ -1,8 +1,9 @@
 #!/usr/bin/env bash
 # ============================================================================
-# Bridge-LeRobot ECOT Stage-2 Training Launcher
-#  - Uses starVLA/config/training/bridge_ecot_stage2.yaml as base config
-#  - Provides common overrides similar to scripts/run_ecot_8gpu.sh
+# Libero (LeRobot, libero_all) :: ECOT Training Launcher
+#  - Uses starVLA/config/training/libero_all_ecot_stage4.yaml as base config
+#  - Provides common overrides similar to scripts/run_starvla_bridge.sh
+#  - Uses a local steps-cache directory (required for dataset mixtures)
 # ============================================================================
 set -euo pipefail
 
@@ -22,63 +23,61 @@ export TOKENIZERS_PARALLELISM="${TOKENIZERS_PARALLELISM:-false}"
 NUM_GPUS="${NUM_GPUS:-8}"
 
 MAX_TRAIN_STEPS="${MAX_TRAIN_STEPS:-60000}"
-PER_DEVICE_BATCH="${PER_DEVICE_BATCH:-24}"
-LR_VLM="${LR_VLM:-1e-5}"
-LR_ACTION="${LR_ACTION:-1e-4}"
+PER_DEVICE_BATCH="${PER_DEVICE_BATCH:-16}"
+LR_VLM="${LR_VLM:-1.2e-5}"
+LR_ACTION="${LR_ACTION:-1.2e-4}"
+LR_BASE="${LR_BASE:-3.0e-5}"
 ACTION_DIT_TYPE="${ACTION_DIT_TYPE:-DiT-B}"
-RUN_ID="${RUN_ID:-bridge_lerobot_DITB_LR1E-4_LR1E-5_BTS24_60K}"
 DIFFUSION_MODEL_DROPOUT="${DIFFUSION_MODEL_DROPOUT:-0.1}"
+
+RUN_ID="${RUN_ID:-libero_all_ecot}"
+TRAINING_STAGE="${TRAINING_STAGE:-full}"     # full / reasoning_only / action_only
+COT_MODE="${COT_MODE:-implicit}"             # none / vlm_seen_no_out / explicit / implicit
+
+# 默认随 COT_MODE 重写；也可手动指定
+SCHEDULED_STAGE="${SCHEDULED_STAGE:-4}"
+
+SAVE_INTERVAL="${SAVE_INTERVAL:-4000}"
+EVAL_INTERVAL="${EVAL_INTERVAL:-20000000}"
+LOGGING_FREQUENCY="${LOGGING_FREQUENCY:-10}"
+WARMUP_RATIO="${WARMUP_RATIO:-0.1}"
+MIN_SAVE_STEP="${MIN_SAVE_STEP:-16000}"
+
 # Reasoning summary (latent summarizer) controls
 USE_REASONING_SUMMARY="${USE_REASONING_SUMMARY:-false}"
 REASONING_SUMMARY_TOKENS="${REASONING_SUMMARY_TOKENS:-2}"
 REASONING_SUMMARY_HEADS="${REASONING_SUMMARY_HEADS:-4}"
 REASONING_SUMMARY_DROPOUT="${REASONING_SUMMARY_DROPOUT:-0.1}"
+
 # FiLM controls
 USE_REASONING_FILM="${USE_REASONING_FILM:-false}"
 REASONING_FILM_FIRST_K="${REASONING_FILM_FIRST_K:-4}"
 REASONING_FILM_DROPOUT="${REASONING_FILM_DROPOUT:-0.1}"
 REASONING_FILM_HIDDEN="${REASONING_FILM_HIDDEN:-1024}"
- 
+
+# Img-next controls
+ENABLE_IMG_NEXT="${ENABLE_IMG_NEXT:-true}"
+IMG_NEXT_USE_TEACHER="${IMG_NEXT_USE_TEACHER:-false}"
+IMG_NEXT_LOSS_WEIGHT="${IMG_NEXT_LOSS_WEIGHT:-0.1}"
 USE_IMG_NEXT_MLP="${USE_IMG_NEXT_MLP:-false}"
 
+# Language/VLM loss weight (set 0 to mimic action-only/no-imgloss runs)
+VLM_LOSS_WEIGHT="${VLM_LOSS_WEIGHT:-0}"
 
+WANDB_PROJECT="${WANDB_PROJECT:-libero_ecot_final}"
+WANDB_ENTITY="${WANDB_ENTITY:-lvj2114-beijing-academy-of-artificial-intelligence}"
 
+CONFIG_PATH="${CONFIG_PATH:-/share/project/lvjing/starVLA/starVLA/config/training/libero_all_ecot_stage4.yaml}"
+RUN_ROOT_DIR="${RUN_ROOT_DIR:-results/LiberoECOT_final}"
+MASTER_PORT="${MASTER_PORT:-29513}"
 
-
-TRAINING_STAGE="${TRAINING_STAGE:-full}"
-
-COT_MODE="${COT_MODE:-implicit}"
-
-# Action-only run: use stage 4 (all latents) and keep only action tokens，默认随 COT_MODE 重写
-SCHEDULED_STAGE="${SCHEDULED_STAGE:-4}"
-
-MIN_SAVE_STEP="${MIN_SAVE_STEP:-15000}"
-LR_BASE="${LR_BASE:-3.0e-5}"
-
-WANDB_PROJECT="${WANDB_PROJECT:-bridge_lerobot_final}"
-
-
-CONFIG_PATH="${CONFIG_PATH:-/share/project/lvjing/starVLA/starVLA/config/training/bridge_lerobot_stage2.yaml}"
-RUN_ROOT_DIR="${RUN_ROOT_DIR:-results/BridgeFinal_Action}"
-MASTER_PORT="${MASTER_PORT:-29512}"
-SAVE_INTERVAL="${SAVE_INTERVAL:-2500}"
-EVAL_INTERVAL="${EVAL_INTERVAL:-20000000}"
-LOGGING_FREQUENCY="${LOGGING_FREQUENCY:-20}"
-WARMUP_RATIO="${WARMUP_RATIO:-0.1}"
-PRETRAINED_CKPT="${PRETRAINED_CKPT:-/share/project/lvjing/starVLA/results/BridgeLeRobot_VLM_Final_SDPA5/bridge_multistage_stage_4/checkpoints/steps_10000_pytorch_model.pt}"
-# PRETRAINED_CKPT="${PRETRAINED_CKPT:-}"
-
-if [[ -n "${PRETRAINED_CKPT}" ]]; then
-  while [[ ! -f "${PRETRAINED_CKPT}" ]]; do
-    echo "⏳ PRETRAINED_CKPT 不存在，等待生成: ${PRETRAINED_CKPT}"
-    echo "   每 3 分钟检查一次..."
-    sleep 180
-  done
-  echo "✅ 检测到 PRETRAINED_CKPT: ${PRETRAINED_CKPT}"
-fi
-
-
+# Optional: load from checkpoint
+PRETRAINED_CKPT="${PRETRAINED_CKPT:-/share/project/lvjing/starVLA/results/LiberoECOT/libero_all_multistage_stage_4/checkpoints/steps_2000_pytorch_model.pt}"
 RELOAD_MODULES="${RELOAD_MODULES:-qwen_vl_interface}"
+
+# Steps cache: directory path recommended for libero_all mixture.
+STEPS_CACHE_PATH="${STEPS_CACHE_PATH:-${RUN_ROOT_DIR}/steps_cache/libero_all}"
+WRITE_STEPS_CACHE="${WRITE_STEPS_CACHE:-true}"
 
 # ----------------------------------------------------------------------------
 # 根据 COT_MODE 派生开关
@@ -115,18 +114,22 @@ case "${COT_MODE}" in
     ;;
 esac
 
-if (( SCHEDULED_STAGE <= 2 )); then
-  DEFAULT_STEPS_CACHE="/share/project/baishuanghao/data/bridge_orig_lerobot/meta/steps_9f926a41b0ba.pkl"
-else
-  DEFAULT_STEPS_CACHE="/share/project/baishuanghao/data/bridge_orig_lerobot/meta/steps_45cc68a6124a.pkl"
+if [[ -n "${PRETRAINED_CKPT}" ]]; then
+  while [[ ! -f "${PRETRAINED_CKPT}" ]]; do
+    echo "⏳ PRETRAINED_CKPT 不存在，等待生成: ${PRETRAINED_CKPT}"
+    echo "   每 3 分钟检查一次..."
+    sleep 180
+  done
+  echo "✅ 检测到 PRETRAINED_CKPT: ${PRETRAINED_CKPT}"
 fi
-STEPS_CACHE_PATH="${STEPS_CACHE_PATH:-${DEFAULT_STEPS_CACHE}}"
 
 OUTPUT_DIR="${RUN_ROOT_DIR}/${RUN_ID}"
 mkdir -p "${OUTPUT_DIR}"
 cp "$0" "${OUTPUT_DIR}/run_command.sh"
 
+# ----------------------------------------------------------------------------
 # 训练配置覆盖项
+# ----------------------------------------------------------------------------
 TRAIN_CONFIG_ARGS=(
   --trainer.max_train_steps "${MAX_TRAIN_STEPS}"
   --trainer.save_interval "${SAVE_INTERVAL}"
@@ -137,14 +140,19 @@ TRAIN_CONFIG_ARGS=(
   --trainer.learning_rate.base "${LR_BASE}"
   --trainer.learning_rate.action_model "${LR_ACTION}"
   --trainer.learning_rate.qwen_vl_interface "${LR_VLM}"
-  --framework.action_model.action_model_type "${ACTION_DIT_TYPE}"
+
   --datasets.vla_data.per_device_batch_size "${PER_DEVICE_BATCH}"
   --datasets.vla_data.bridge_reasoning.stage "${SCHEDULED_STAGE}"
   --datasets.vla_data.ecot.scheduled_stage "${SCHEDULED_STAGE}"
-  --datasets.vla_data.bridge_reasoning.include_action_tokens "false"
+
   --datasets.vla_data.bridge_annotations.steps_cache_path "${STEPS_CACHE_PATH}"
+  --datasets.vla_data.bridge_annotations.write_steps_cache "${WRITE_STEPS_CACHE}"
+
+  --framework.training_stage "${TRAINING_STAGE}"
   --framework.cot_mode "${COT_MODE}"
   --framework.enable_latent_reasoning "${ENABLE_LATENT_REASONING}"
+
+  --framework.action_model.action_model_type "${ACTION_DIT_TYPE}"
   --framework.action_model.diffusion_model_cfg.dropout "${DIFFUSION_MODEL_DROPOUT}"
   --framework.action_model.use_reasoning_film "${USE_REASONING_FILM}"
   --framework.action_model.use_img_next_mlp_compress "${USE_IMG_NEXT_MLP}"
@@ -155,12 +163,13 @@ TRAIN_CONFIG_ARGS=(
   --framework.action_model.reasoning_summary_tokens "${REASONING_SUMMARY_TOKENS}"
   --framework.action_model.reasoning_summary_heads "${REASONING_SUMMARY_HEADS}"
   --framework.action_model.reasoning_summary_dropout "${REASONING_SUMMARY_DROPOUT}"
-  --framework.training_stage "full"
+
   --framework.img_next.enable "true"
   --framework.img_next.use_teacher "false"
+  --framework.img_next.loss_weight "0.1"
+  --datasets.vla_data.bridge_reasoning.include_action_tokens "false"
   --framework.latent_reasoning.vlm_loss_weight "0"
   --datasets.vla_data.bridge_reasoning.vlm_loss_weight "0"
-
 )
 
 if [[ -n "${PRETRAINED_CKPT}" ]]; then
@@ -173,17 +182,17 @@ fi
 BASE_CONFIG_ARGS=(
   --run_root_dir "${RUN_ROOT_DIR}"
   --run_id "${RUN_ID}"
-  --framework.training_stage "${TRAINING_STAGE}"
   --wandb_project "${WANDB_PROJECT}"
-  --wandb_entity "${WANDB_ENTITY:-lvj2114-beijing-academy-of-artificial-intelligence}"
+  --wandb_entity "${WANDB_ENTITY}"
 )
 
 echo "============================================================================"
-echo " Bridge-LeRobot ECOT Stage-2 Training"
+echo " Libero (libero_all) ECOT Training"
 echo " Config : ${CONFIG_PATH}"
 echo " Run ID : ${RUN_ID}"
 echo " Output : ${OUTPUT_DIR}"
 echo " GPUs   : ${NUM_GPUS} (master_port=${MASTER_PORT})"
+echo " Cache  : ${STEPS_CACHE_PATH} (write=${WRITE_STEPS_CACHE})"
 echo "============================================================================"
 
 torchrun \
@@ -196,3 +205,4 @@ torchrun \
   "$@"
 
 echo "✅ Training finished. Check ${OUTPUT_DIR} for logs and checkpoints."
+

@@ -3,6 +3,8 @@
 # Implemented by [Jinhui YE / HKUST University] in [2025].
 
 import torch
+import time
+import copy
 from typing import Optional, List, Tuple
 from transformers.modeling_outputs import CausalLMOutputWithPast
 from transformers import Qwen3VLForConditionalGeneration, AutoProcessor
@@ -16,8 +18,9 @@ from qwen_vl_utils import process_vision_info
 from starVLA.training.trainer_utils import initialize_overwatch
 
 logger = initialize_overwatch(__name__)
-
+BASE_PROMPT_1='Robot task reasoning: first output the Subtask to preform next, then output the BBox of target object, then generate the Motion Reasoning. Instruction:'
 IGNORE_INDEX = -100
+
 IMAGE_TOKEN_INDEX = 151655
 VIDEO_TOKEN_INDEX = 151656
 DEFAULT_IMAGE_TOKEN = "<|image_pad|>"
@@ -54,17 +57,18 @@ class _QWen3_VL_Interface(nn.Module):
         qwenvl_config = config.framework.get("qwenvl", {})
         model_id = qwenvl_config.get("base_vlm", "Qwen/Qwen3-VL-4B-Instruct")
         cache_dir = qwenvl_config.get("cache_dir", None)
+        attn_impl = qwenvl_config.get("attn_implementation", "flash_attention_2")
 
         model = Qwen3VLForConditionalGeneration.from_pretrained(
             model_id,
-            attn_implementation="flash_attention_2",
+            attn_implementation=attn_impl,
             dtype=torch.bfloat16,
             device_map="cuda",
             cache_dir=cache_dir,
         )
         processor = AutoProcessor.from_pretrained(model_id, cache_dir=cache_dir)
         
-
+        
         self.model = model
         self.processor = processor
         self.config = config
@@ -86,6 +90,102 @@ class _QWen3_VL_Interface(nn.Module):
             self.thinking_token_id = None
             self.start_thinking_id = None
             self.end_thinking_id = None
+
+        # 添加 img_next special token（用于下一帧对齐）
+        img_next_cfg = getattr(config.framework, "img_next", {}) if hasattr(config, "framework") else {}
+        enable_img_next = False
+        try:
+            enable_img_next = img_next_cfg.get("enable", False)
+        except Exception:
+            enable_img_next = False
+
+        if enable_img_next:
+            self.img_next_token_id = self._add_img_next_token(self.processor.tokenizer, config)
+            logger.info(f"Added img_next token id={self.img_next_token_id}")
+        else:
+            self.img_next_token_id = None
+
+        # img_next EMA target vision encoder (teacher)
+        self.enable_img_next = bool(enable_img_next)
+        self.use_img_next_teacher = bool(img_next_cfg.get("use_teacher", True)) if enable_img_next else False
+        self.img_next_ema_momentum = 0.999
+        self.visual_ema: Optional[nn.Module] = None
+        if self.enable_img_next and self.use_img_next_teacher:
+            self._init_img_next_visual_ema()
+
+    def _get_student_visual(self) -> Optional[nn.Module]:
+        """
+        Return the student vision encoder used by Qwen3-VL `get_image_features`.
+
+        Upstream (transformers) implementation uses:
+          Qwen3VLForConditionalGeneration.get_image_features -> self.model.get_image_features
+          Qwen3VLModel.get_image_features -> self.visual(...)
+        """
+        base = getattr(self.model, "model", None)
+        if base is None:
+            return None
+        return getattr(base, "visual", None)
+
+    def _init_img_next_visual_ema(self) -> None:
+        student_visual = self._get_student_visual()
+        if student_visual is None:
+            logger.warning("[img_next_ema] student visual encoder not found; disable img_next EMA teacher")
+            self.visual_ema = None
+            return
+        try:
+            self.visual_ema = copy.deepcopy(student_visual)
+            self.visual_ema.requires_grad_(False)
+            self.visual_ema.eval()
+            logger.info("[img_next_ema] Initialized EMA teacher vision encoder")
+        except Exception as exc:
+            logger.warning(f"[img_next_ema] Failed to init EMA teacher vision encoder: {exc}")
+            self.visual_ema = None
+
+    @torch.no_grad()
+    def update_img_next_ema(self, momentum: Optional[float] = None) -> None:
+        """
+        EMA update for teacher vision encoder parameters:
+          ema = m * ema + (1-m) * student
+        """
+        if (not self.enable_img_next) or (not getattr(self, "use_img_next_teacher", True)):
+            return
+        student_visual = self._get_student_visual()
+        teacher_visual = getattr(self, "visual_ema", None)
+        if student_visual is None or teacher_visual is None:
+            return
+
+        m = float(self.img_next_ema_momentum if momentum is None else momentum)
+        if not (0.0 <= m <= 1.0):
+            raise ValueError(f"EMA momentum must be in [0,1], got {m}")
+
+        for p_ema, p in zip(teacher_visual.parameters(), student_visual.parameters()):
+            p_ema.data.mul_(m).add_(p.data, alpha=1.0 - m)
+        for b_ema, b in zip(teacher_visual.buffers(), student_visual.buffers()):
+            b_ema.copy_(b)
+
+    @torch.no_grad()
+    def get_image_features_target(
+        self,
+        pixel_values: torch.FloatTensor,
+        image_grid_thw: Optional[torch.LongTensor] = None,
+    ):
+        """
+        Teacher-only image feature extraction for img_next alignment.
+        Matches transformers `Qwen3VLModel.get_image_features` behavior but uses EMA vision encoder.
+        """
+        base = getattr(self.model, "model", None)
+        if base is None or not hasattr(base, "visual"):
+            raise RuntimeError("Qwen3 base model visual encoder not found")
+
+        teacher_visual = self.visual_ema if self.visual_ema is not None else base.visual
+        if image_grid_thw is None:
+            raise ValueError("image_grid_thw is required for Qwen3-VL image feature splitting")
+
+        pv = pixel_values.type(teacher_visual.dtype)
+        image_embeds, deepstack_image_embeds = teacher_visual(pv, grid_thw=image_grid_thw)
+        split_sizes = (image_grid_thw.prod(-1) // teacher_visual.spatial_merge_size**2).tolist()
+        image_embeds = torch.split(image_embeds, split_sizes)
+        return image_embeds, deepstack_image_embeds
 
     def _add_thinking_tokens(self, tokenizer, cfg):
         """
@@ -184,6 +284,65 @@ class _QWen3_VL_Interface(nn.Module):
             "end_thinking_id": end_thinking_id,
         }
 
+    def _add_img_next_token(self, tokenizer, cfg) -> int:
+        """
+        Add img_next special token and initialize embeddings.
+
+        Returns:
+            int: img_next token id
+        """
+        img_cfg = cfg.framework.get("img_next", {}) if hasattr(cfg, "framework") else {}
+        img_next_token = img_cfg.get("token", "<img_next>")
+
+        existing_tokens = set(tokenizer.get_vocab().keys())
+        tokens_to_add = []
+        if img_next_token not in existing_tokens:
+            tokens_to_add.append(img_next_token)
+
+        if tokens_to_add:
+            logger.info(f"Adding img_next token to tokenizer: {tokens_to_add}")
+            tokenizer.add_tokens(tokens_to_add, special_tokens=True)
+
+        # Resize embeddings if vocab expanded
+        old_vocab_size = self.model.get_input_embeddings().weight.shape[0]
+        new_vocab_size = len(tokenizer)
+        if new_vocab_size > old_vocab_size:
+            logger.info(f"Resizing embeddings for img_next from {old_vocab_size} to {new_vocab_size}")
+            self.model.resize_token_embeddings(new_vocab_size)
+
+        img_next_token_id = tokenizer.convert_tokens_to_ids(img_next_token)
+        if img_next_token_id == tokenizer.unk_token_id:
+            raise ValueError(f"Failed to add img_next token: {img_next_token}")
+
+        # Init embedding using a reference token
+        embeddings = self.model.get_input_embeddings()
+        target_token = "<<"
+        if target_token not in tokenizer.get_vocab():
+            target_token = tokenizer.pad_token if tokenizer.pad_token else tokenizer.bos_token
+        target_id = tokenizer.convert_tokens_to_ids(target_token)
+
+        if target_id == tokenizer.unk_token_id:
+            target_id = 0
+            while target_id < len(tokenizer):
+                tok = tokenizer.convert_ids_to_tokens(target_id)
+                if not (tok.startswith("<") and tok.endswith(">")):
+                    break
+                target_id += 1
+
+        target_embedding = embeddings.weight.data[target_id].clone()
+        embeddings.weight.data[img_next_token_id] = target_embedding
+
+        # If LM head is not tied, also init
+        if hasattr(self.model, "lm_head") and self.model.lm_head is not None:
+            if not (hasattr(self.model, "tie_word_embeddings") and self.model.tie_word_embeddings):
+                lm_head = self.model.lm_head
+                if hasattr(lm_head, "weight"):
+                    target_lm_weight = lm_head.weight.data[target_id].clone()
+                    if img_next_token_id < lm_head.weight.shape[0]:
+                        lm_head.weight.data[img_next_token_id] = target_lm_weight
+
+        return img_next_token_id
+
     def forward(
         self,
         **kwargs,
@@ -198,6 +357,71 @@ class _QWen3_VL_Interface(nn.Module):
             )
 
         return outputs
+
+    def _should_enable_img_next_full_attention(self) -> bool:
+        """
+        Single switch: only enable custom 4D attention mask when the model uses SDPA.
+        """
+        cfg = getattr(self.model, "config", None)
+        attn_impl = getattr(cfg, "_attn_implementation", None)
+        if attn_impl is None and cfg is not None:
+            attn_impl = getattr(getattr(cfg, "text_config", None), "_attn_implementation", None)
+        return attn_impl == "sdpa"
+
+    def _build_img_next_full_attention_mask(
+        self,
+        attention_mask: torch.Tensor,  # [B, T] pad mask (1=valid)
+        input_ids: torch.Tensor,       # [B, T]
+    ) -> torch.Tensor:
+        """
+        Build a full 4D additive mask [B, 1, T, T] that is:
+          - causal + padding for the whole sequence
+          - plus bidirectional attention inside the *last contiguous 16* <img_next> tokens
+
+        NOTE: This assumes <img_next> has no tokens after it (end of sequence segment).
+        """
+        if attention_mask.ndim != 2 or input_ids.ndim != 2:
+            raise ValueError(
+                f"Expected attention_mask/input_ids to be 2D [B,T], got {attention_mask.ndim}D/{input_ids.ndim}D"
+            )
+        if attention_mask.shape != input_ids.shape:
+            raise ValueError(f"attention_mask shape {tuple(attention_mask.shape)} != input_ids shape {tuple(input_ids.shape)}")
+
+        B, T = attention_mask.shape
+        device = attention_mask.device
+        dtype = torch.bfloat16 if device.type == "cuda" else torch.float32
+        min_val = torch.finfo(dtype).min
+
+        valid = attention_mask.to(torch.bool)
+
+        # Base causal + padding mask (bool allow matrix)
+        base = torch.tril(torch.ones((T, T), device=device, dtype=torch.bool))
+        allow = base.unsqueeze(0) & valid.unsqueeze(2) & valid.unsqueeze(1)  # [B, T, T]
+
+        img_next_id = getattr(self, "img_next_token_id", None)
+        if img_next_id is not None:
+            img = (input_ids == img_next_id) & valid  # [B, T]
+            has_img = img.any(dim=1)  # [B]
+
+            idx = torch.arange(T, device=device)
+            end = (img.to(torch.long) * idx).max(dim=1).values  # [B]
+            block_len = 16
+            start = end - (block_len - 1)  # [B]
+
+            block = (idx.unsqueeze(0) >= start.unsqueeze(1)) & (idx.unsqueeze(0) <= end.unsqueeze(1))  # [B, T]
+            block_ok = (
+                has_img
+                & (start >= 0)
+                & (block.sum(dim=1) == block_len)
+                & ((img & block).sum(dim=1) == block_len)
+            )
+            if block_ok.any():
+                block = block & block_ok.unsqueeze(1)
+                allow = allow | (block.unsqueeze(2) & block.unsqueeze(1))  # bidirectional inside block
+
+        full = torch.full((B, 1, T, T), min_val, device=device, dtype=dtype)
+        full.masked_fill_(allow.unsqueeze(1), 0)
+        return full
 
     def forward_latent(
         self,
@@ -263,6 +487,16 @@ class _QWen3_VL_Interface(nn.Module):
         # Get text embedding layer
         embeddings = self.model.get_input_embeddings()
         inputs_embeds = embeddings(input_ids)  # [B, T, H]
+
+        full_attention = None
+        if (
+            self._should_enable_img_next_full_attention()
+            and attention_mask is not None
+            and isinstance(attention_mask, torch.Tensor)
+            and attention_mask.ndim == 2
+        ):
+            # Build once, slice per forward call.
+            full_attention = self._build_img_next_full_attention_mask(attention_mask=attention_mask, input_ids=input_ids)
 
         # Helper for debugging visual inputs
         def _describe_pixel_values(pv):
@@ -334,7 +568,7 @@ class _QWen3_VL_Interface(nn.Module):
                 with torch.autocast("cuda", dtype=torch.bfloat16):
                     outputs = self.model(
                         input_ids=input_ids,
-                        attention_mask=attention_mask,
+                        attention_mask=full_attention if full_attention is not None else attention_mask,
                         pixel_values=pixel_values,
                         image_grid_thw=image_grid_thw,
                         labels=labels,
@@ -376,7 +610,9 @@ class _QWen3_VL_Interface(nn.Module):
                     with torch.autocast("cuda", dtype=torch.bfloat16):
                         outputs = self.model(
                             inputs_embeds=inputs_embeds[:, s:e, :],
-                            attention_mask=attention_mask[:, s:e],
+                            attention_mask=(
+                                full_attention[:, :, :e, :e] if full_attention is not None else attention_mask[:, s:e]
+                            ),
                             pixel_values=pixel_values,
                             image_grid_thw=image_grid_thw,
                             output_hidden_states=True,
@@ -400,7 +636,9 @@ class _QWen3_VL_Interface(nn.Module):
                     with torch.autocast("cuda", dtype=torch.bfloat16):
                         outputs = self.model(
                             inputs_embeds=inputs_embeds[:, s:e, :],
-                            attention_mask=attention_mask[:, :e],  # Full attention mask up to current position
+                            attention_mask=(
+                                full_attention[:, :, s:e, :e] if full_attention is not None else attention_mask[:, :e]
+                            ),  # Full attention mask up to current position
                             pixel_values=None,  # Vision already processed in first pass
                             image_grid_thw=None,
                             past_key_values=kv_cache,  # Full cache (attention mask handles usage)
@@ -478,7 +716,11 @@ class _QWen3_VL_Interface(nn.Module):
             with torch.autocast("cuda", dtype=torch.bfloat16):
                 outputs = self.model(
                     inputs_embeds=inputs_embeds[:, s:e, :],
-                    attention_mask=attention_mask[:, :e] if kv_cache else attention_mask,
+                    attention_mask=(
+                        (full_attention[:, :, s:e, :e] if full_attention is not None else attention_mask[:, :e])
+                        if kv_cache
+                        else (full_attention[:, :, s:e, s:e] if full_attention is not None else attention_mask)
+                    ),
                     pixel_values=None if kv_cache else pixel_values,
                     image_grid_thw=None if kv_cache else image_grid_thw,
                     past_key_values=kv_cache,
@@ -523,6 +765,78 @@ class _QWen3_VL_Interface(nn.Module):
             )
         return generation_output
 
+    @torch.inference_mode()
+    def generate_thinking_explicit(
+        self,
+        input_ids: torch.Tensor,
+        attention_mask: torch.Tensor,
+        pixel_values: Optional[torch.Tensor] = None,
+        image_grid_thw: Optional[torch.Tensor] = None,
+        max_thinking_len: int = 256,
+        temperature: float = 0.1,
+        top_p: float = 0.9,
+        **kwargs,
+    ):
+        """
+        显式自回归生成思维文本，返回完整序列与生成耗时。
+        """
+        t0 = time.perf_counter()
+        # Stop criteria: always stop on the chat template end token <|im_end|>.
+        # (This is the tokenizer EOS for Qwen chat models.)
+        tok = self.processor.tokenizer
+        eos_id = tok.eos_token_id
+        try:
+            im_end_id = tok.convert_tokens_to_ids("<|im_end|>")
+            if im_end_id is not None and im_end_id != tok.unk_token_id:
+                eos_id = int(im_end_id)
+        except Exception:
+            pass
+
+        gen_output = self.model.generate(
+            input_ids=input_ids,
+            attention_mask=attention_mask,
+            pixel_values=pixel_values,
+            image_grid_thw=image_grid_thw,
+            max_new_tokens=max_thinking_len,
+            do_sample=True,
+            temperature=temperature,
+            top_p=top_p,
+            eos_token_id=eos_id,
+            pad_token_id=self.processor.tokenizer.pad_token_id,
+            output_hidden_states=False,
+            return_dict_in_generate=True,
+        )
+        t1 = time.perf_counter()
+
+        generated_ids = gen_output.sequences  # [B, prompt+thinking]
+
+        # 解码生成部分文本，便于日志/调试
+        thinking_texts = []
+        prompt_len = input_ids.shape[1]
+        for seq in generated_ids:
+            gen_tokens = seq[prompt_len:]
+            text = self.processor.tokenizer.decode(gen_tokens, skip_special_tokens=False)
+            thinking_texts.append(text)
+
+        return {
+            "generated_ids": generated_ids,
+            "thinking_text": thinking_texts,
+            "gen_time": t1 - t0,
+        }
+
+    def load_state_dict(self, state_dict, strict: bool = True):
+        """
+        Allow loading checkpoints that包含 visual_ema 权重，即便当前配置关闭了 teacher。
+        当 use_img_next_teacher=False 时，自动丢弃所有以 visual_ema 开头的键，避免 strict 加载失败。
+        """
+        if not getattr(self, "use_img_next_teacher", True):
+            pruned = {k: v for k, v in state_dict.items() if not k.startswith("visual_ema")}
+            dropped = len(state_dict) - len(pruned)
+            if dropped > 0:
+                logger.info(f"[load_state_dict] Dropped {dropped} visual_ema keys (use_img_next_teacher=False)")
+            state_dict = pruned
+        return super().load_state_dict(state_dict, strict=strict)
+
     def build_qwenvl_inputs(self, images, instructions, solutions=None, **kwargs):
         """
         Build model inputs from raw data (images + instructions + optional solutions).
@@ -535,12 +849,19 @@ class _QWen3_VL_Interface(nn.Module):
         # Check if implicit reasoning is enabled
         enable_latent_reasoning = self.config.framework.get("enable_latent_reasoning", False)
         thinking_token_id = getattr(self, "thinking_token_id", None)
+        action_tokens = kwargs.get("action_tokens", None)
         
         # If implicit reasoning is enabled, we need to align thinking tokens
         if enable_latent_reasoning and thinking_token_id is not None:
             # Note: solutions parameter is not used in alignment path
-            print('build_qwenvl_inputs_with_alignment')
-            return self._build_qwenvl_inputs_with_alignment(images, instructions, solutions, thinking_token_id)
+            # print('build_qwenvl_inputs_with_alignment')
+            return self._build_qwenvl_inputs_with_alignment(
+                images,
+                instructions,
+                solutions,
+                thinking_token_id,
+                action_tokens=action_tokens,
+            )
         
         # Normal path: batch tokenization (no alignment needed)
         # Create messages: one message per sample
@@ -556,7 +877,7 @@ class _QWen3_VL_Interface(nn.Module):
                 prompt = CoT_prompt.replace("{instruction}", instruction)
             else:
                 prompt = instruction
-
+            prompt = instruction
             content.append({"type": "text", "text": prompt})
             msg = [{"role": "user", "content": content}]
 
@@ -597,6 +918,9 @@ class _QWen3_VL_Interface(nn.Module):
                     logger.warning(f"Action token not found in sample {i}. Please check if action tokens are added to tokenizer. See starVLA/model/modules/vlm/tools/add_qwen_special_tokens/README.md.")
             
             labels[labels == self.processor.tokenizer.pad_token_id] = -100 ## mask out pad tokens as well
+            # Mask img_next tokens out of VLM loss
+            if getattr(self, "img_next_token_id", None) is not None:
+                labels[labels == self.img_next_token_id] = IGNORE_INDEX
             batch_inputs['labels'] = labels
 
         return batch_inputs.to(self.model.device)
@@ -606,7 +930,8 @@ class _QWen3_VL_Interface(nn.Module):
         images, 
         instructions, 
         solutions, 
-        thinking_token_id: int
+        thinking_token_id: int,
+        action_tokens=None,
     ):
         """
         Build model inputs with thinking token alignment for implicit reasoning training.
@@ -633,10 +958,20 @@ class _QWen3_VL_Interface(nn.Module):
             if "CoT_prompt" in self.config.datasets.vla_data:
                 CoT_prompt = self.config.datasets.vla_data.get("CoT_prompt", "")
                 prompt = CoT_prompt.replace("{instruction}", instruction)
-                
             else:
-                base_prompt = "Robot task reasoning: first output the target bbox, then list the subtask, then generate the motion reasoning. Instruction:"
-                prompt = f'{base_prompt} {instruction}'
+                if self.config.framework.cot_mode == "none":
+                    prompt = instruction
+                else:
+                    base_prompt = BASE_PROMPT_1
+                    prompt = f"{base_prompt} {instruction}"
+                    # print(f"prompt: {prompt}")
+
+            # Minimal action integration: append action token string directly into prompt text so it
+            # goes through the same chat template + tokenization + padding pipeline.
+            if action_tokens is not None and isinstance(action_tokens, (list, tuple)) and sample_idx < len(action_tokens):
+                act_text = action_tokens[sample_idx] or ""
+                if act_text:
+                    prompt = f"{prompt} Action: {act_text}"
 
             content.append({"type": "text", "text": prompt})
             msg = [{"role": "user", "content": content}]
@@ -658,7 +993,7 @@ class _QWen3_VL_Interface(nn.Module):
         batched_ids = batch_inputs["input_ids"]          # [B, T_pad]
         batched_mask = batch_inputs["attention_mask"]    # [B, T_pad]
         B, T_pad = batched_ids.shape
-        
+        # print(f"batched_ids: {batched_ids[0]}")
         ids_cpu = batched_ids.cpu()
         mask_cpu = batched_mask.cpu()
         
@@ -675,34 +1010,34 @@ class _QWen3_VL_Interface(nn.Module):
             except Exception:
                 image_pad_token_id = None
 
-        if image_pad_token_id is not None:
-            for sample_idx, (ids, sample_imgs, instruction) in enumerate(zip(input_ids_list, images, instructions)):
-                pad_count = int((ids == image_pad_token_id).sum().item())
-                expected_count = len(sample_imgs) * 64  # each image contributes 64 vision patches at 224x224
-                if pad_count != expected_count:
-                    logger.warning(
-                        "[build_qwenvl_inputs_with_alignment] image_pad mismatch on sample %d: count=%d expected=%d | "
-                        "instruction=%r input_ids_shape=%s attention_mask_shape=%s",
-                        sample_idx,
-                        pad_count,
-                        expected_count,
-                        instruction,
-                        tuple(ids.shape),
-                        tuple(attention_mask_list[sample_idx].shape),
-                    )
-                    try:
-                        decoded = self.processor.tokenizer.decode(ids, skip_special_tokens=False)
-                        logger.warning(
-                            "[build_qwenvl_inputs_with_alignment] sample %d decoded (truncated): %.200s",
-                            sample_idx,
-                            decoded,
-                        )
-                    except Exception as decode_exc:
-                        logger.warning(
-                            "[build_qwenvl_inputs_with_alignment] failed to decode sample %d: %s",
-                            sample_idx,
-                            decode_exc,
-                        )
+        # if image_pad_token_id is not None:
+        #     for sample_idx, (ids, sample_imgs, instruction) in enumerate(zip(input_ids_list, images, instructions)):
+        #         pad_count = int((ids == image_pad_token_id).sum().item())
+        #         expected_count = len(sample_imgs) * 64  # each image contributes 64 vision patches at 224x224
+        #         if pad_count != expected_count:
+        #             logger.warning(
+        #                 "[build_qwenvl_inputs_with_alignment] image_pad mismatch on sample %d: count=%d expected=%d | "
+        #                 "instruction=%r input_ids_shape=%s attention_mask_shape=%s",
+        #                 sample_idx,
+        #                 pad_count,
+        #                 expected_count,
+        #                 instruction,
+        #                 tuple(ids.shape),
+        #                 tuple(attention_mask_list[sample_idx].shape),
+        #             )
+        #             try:
+        #                 decoded = self.processor.tokenizer.decode(ids, skip_special_tokens=False)
+        #                 logger.warning(
+        #                     "[build_qwenvl_inputs_with_alignment] sample %d decoded (truncated): %.200s",
+        #                     sample_idx,
+        #                     decoded,
+        #                 )
+        #             except Exception as decode_exc:
+        #                 logger.warning(
+        #                     "[build_qwenvl_inputs_with_alignment] failed to decode sample %d: %s",
+        #                     sample_idx,
+        #                     decode_exc,
+        #                 )
         
         # Align thinking tokens (position_ids will be computed by Qwen3-VL internally)
         input_ids_list, attention_mask_list = self._align_thinking_tokens(
@@ -718,10 +1053,16 @@ class _QWen3_VL_Interface(nn.Module):
         # Truncate if necessary
         input_ids = input_ids[:, :model_max_length]
         attention_mask = attention_mask[:, :model_max_length]
-        
+
+        # Action tokens are appended into `prompt` before tokenization; no tensor-level suffixing here.
+
         # Replace with aligned input_ids and attention_mask (position_ids will be auto-computed by Qwen3-VL)
         batch_inputs["input_ids"] = input_ids
         batch_inputs["attention_mask"] = attention_mask
+        # 标记 img_next 位置，供下游自定义注意力/掩码使用（action suffix 追加后重新计算）
+        img_next_id = getattr(self, "img_next_token_id", None)
+        if img_next_id is not None:
+            batch_inputs["img_next_mask"] = (input_ids == img_next_id).to(input_ids.dtype)
         # Remove position_ids - let Qwen3-VL compute it automatically based on attention_mask
 
         # Optional: attach masked labels (instruction+latent masked; post-latent unmasked)
@@ -779,9 +1120,13 @@ class _QWen3_VL_Interface(nn.Module):
         # Get valid positions (samples that have thinking tokens)
         valid_positions = [pos for pos in earliest_thinking_positions if pos >= 0]
         if not valid_positions:
-            # No thinking tokens found, return original lists
-            logger.debug("No thinking tokens found in batch, skipping alignment")
-            return input_ids_list, attention_mask_list
+            # No thinking tokens found: align @ delimiter for batch-level masking consistency.
+            return self._align_at_delimiter(
+                input_ids_list=input_ids_list,
+                attention_mask_list=attention_mask_list,
+                model_max_length=model_max_length,
+                pad_token_id=pad_token_id,
+            )
         
         # Align to the latest position (rightmost thinking token)
         latest_thinking_pos = max(valid_positions)
@@ -824,6 +1169,88 @@ class _QWen3_VL_Interface(nn.Module):
                 aligned_input_ids.append(input_ids)
                 aligned_attention_mask.append(attention_mask)
         
+        return aligned_input_ids, aligned_attention_mask
+
+    def _align_at_delimiter(
+        self,
+        input_ids_list: List[torch.Tensor],
+        attention_mask_list: List[torch.Tensor],
+        model_max_length: int,
+        pad_token_id: int,
+    ) -> Tuple[List[torch.Tensor], List[torch.Tensor]]:
+        """
+        Align the first occurrence of the "@ delimiter" token sequence across batch samples
+        using left pre-padding (same strategy as `_align_thinking_tokens`).
+
+        Assumption (per user): every sample contains the delimiter.
+        """
+        try:
+            at_token_ids = self.processor.tokenizer.encode(" @", add_special_tokens=False)
+        except Exception as e:
+            logger.warning(f"[align_at] Failed to encode @ delimiter: {e}")
+            return input_ids_list, attention_mask_list
+
+        if not at_token_ids:
+            logger.warning("[align_at] Encoded @ delimiter is empty; skip alignment")
+            return input_ids_list, attention_mask_list
+
+        # Build a tensor for subsequence matching once.
+        at_len = len(at_token_ids)
+        at_tensor = None
+        at_positions: List[int] = []
+        if at_len == 1:
+            at_id = int(at_token_ids[0])
+            for ids in input_ids_list:
+                mask = (ids == at_id)
+                if mask.any():
+                    at_positions.append(int(mask.nonzero(as_tuple=False)[0].item()))
+                else:
+                    at_positions.append(-1)
+        else:
+            # Fallback: multi-token delimiter; scan for the first matching subsequence.
+            for ids in input_ids_list:
+                if at_tensor is None:
+                    at_tensor = torch.tensor(at_token_ids, device=ids.device, dtype=ids.dtype)
+                elif at_tensor.device != ids.device or at_tensor.dtype != ids.dtype:
+                    at_tensor = torch.tensor(at_token_ids, device=ids.device, dtype=ids.dtype)
+                pos = -1
+                for i in range(int(ids.shape[0]) - at_len + 1):
+                    if torch.equal(ids[i : i + at_len], at_tensor):
+                        pos = i
+                        break
+                at_positions.append(pos)
+
+        if any(p < 0 for p in at_positions):
+            logger.warning("[align_at] Some samples do not contain @ delimiter; skip alignment")
+            return input_ids_list, attention_mask_list
+
+        latest_at_pos = max(at_positions)
+        # Ensure alignment won't exceed model_max_length (conservative per-sample new length check).
+        max_new_len = 0
+        for ids, pos in zip(input_ids_list, at_positions):
+            pad_count = latest_at_pos - pos
+            max_new_len = max(max_new_len, int(ids.shape[0]) + int(pad_count))
+        if max_new_len > int(model_max_length):
+            logger.warning(
+                "[align_at] @ alignment would exceed model_max_length (%s) (max_new_len=%s); skip alignment",
+                model_max_length,
+                max_new_len,
+            )
+            return input_ids_list, attention_mask_list
+
+        aligned_input_ids: List[torch.Tensor] = []
+        aligned_attention_mask: List[torch.Tensor] = []
+        for ids, mask, pos in zip(input_ids_list, attention_mask_list, at_positions):
+            pad_count = latest_at_pos - pos
+            if pad_count > 0:
+                pad_tensor = torch.full((pad_count,), pad_token_id, dtype=ids.dtype, device=ids.device)
+                mask_pad_tensor = torch.zeros((pad_count,), dtype=mask.dtype, device=mask.device)
+                aligned_input_ids.append(torch.cat([pad_tensor, ids]))
+                aligned_attention_mask.append(torch.cat([mask_pad_tensor, mask]))
+            else:
+                aligned_input_ids.append(ids)
+                aligned_attention_mask.append(mask)
+
         return aligned_input_ids, aligned_attention_mask
 
     # ==============================
@@ -975,6 +1402,11 @@ class _QWen3_VL_Interface(nn.Module):
         # Note: If all reasoning is converted to thinking tokens, post-thinking part may be short or empty
         # This is expected behavior for implicit reasoning training
         
+        # Mask img_next tokens out of VLM loss
+        img_next_id = getattr(self, "img_next_token_id", None)
+        if img_next_id is not None:
+            labels[labels == img_next_id] = IGNORE_INDEX
+
         return labels
 
 

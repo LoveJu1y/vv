@@ -52,6 +52,7 @@ class BridgeAnnotations:
 
         self._cot: Dict[int, Dict[int, StepCoT]] = {}
         self._bbox: Dict[int, Dict[int, StepBBox]] = {}
+        self._bbox2: Dict[int, Dict[int, StepBBox]] = {}
         self._episode_num_steps: Dict[int, int] = {}
 
         if self.cot_path.exists():
@@ -105,10 +106,12 @@ class BridgeAnnotations:
                     self._episode_num_steps[ep] = num_steps
 
                 per_step: Dict[int, StepBBox] = {}
+                per_step2: Dict[int, StepBBox] = {}
 
                 # primary source: dense_labels.active_bbox (aligned with num_steps)
                 dense_labels = obj.get("dense_labels") or {}
                 active_bboxes = dense_labels.get("active_bbox")
+                active_bboxes2 = dense_labels.get("active_bbox2")
                 dense_scores = obj.get("dense_scores")
                 if isinstance(active_bboxes, list):
                     for idx, bbox_val in enumerate(active_bboxes):
@@ -127,8 +130,24 @@ class BridgeAnnotations:
                                 conf = float(conf_val)
                         per_step[idx] = StepBBox(bbox=arr, confidence=conf)
 
+                # optional secondary bbox: dense_labels.active_bbox2 (if present)
+                # NOTE: no dedicated confidence field is assumed; confidence stays None.
+                if isinstance(active_bboxes2, list):
+                    for idx, bbox_val in enumerate(active_bboxes2):
+                        if bbox_val is None:
+                            continue
+                        try:
+                            arr = np.asarray(bbox_val, dtype=np.float32)
+                        except Exception:
+                            arr = None
+                        if arr is None:
+                            continue
+                        per_step2[idx] = StepBBox(bbox=arr, confidence=None)
+
                 if per_step:
                     self._bbox[ep] = per_step
+                if per_step2:
+                    self._bbox2[ep] = per_step2
 
     # --------------------------------------------------------------------- #
     # Public API
@@ -151,6 +170,10 @@ class BridgeAnnotations:
     def get_step_bbox(self, episode_index: int, step_index: int) -> Optional[StepBBox]:
         """Return bbox annotation for (episode, step) or None."""
         return self._bbox.get(episode_index, {}).get(step_index)
+
+    def get_step_bbox2(self, episode_index: int, step_index: int) -> Optional[StepBBox]:
+        """Return optional secondary bbox annotation for (episode, step) or None."""
+        return self._bbox2.get(episode_index, {}).get(step_index)
 
     def episode_bbox_coverage(self, episode_index: int) -> Optional[float]:
         """

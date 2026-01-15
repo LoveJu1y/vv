@@ -40,6 +40,7 @@ if __name__ == "__main__":
         cfg_scale=1.5,                 # cfg from 1.5 to 7 also performs well
         enable_latent_reasoning=args.enable_latent_reasoning,
         thinking_token_count=args.thinking_token_count,
+        img_next_count=args.img_next_count,
         cot_mode=getattr(args, "cot_mode", "implicit"),
         think_max_len=getattr(args, "think_max_len", 64),
         think_temp=getattr(args, "think_temp", 0.1),

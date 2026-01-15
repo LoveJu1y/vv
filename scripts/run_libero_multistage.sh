@@ -1,14 +1,15 @@
 #!/usr/bin/env bash
 # ============================================================================
-# Bridge-LeRobot :: Multi-Stage Training Launcher
-# Runs Stage 1 -> Stage 4 sequentially. Each stage loads the previous stage's
-# checkpoint (configurable step) and adjusts thinking-token settings.
-# ----------------------------------------------------------------------------
-# Stage semantics for this script:
-#   Stage 1 : Full CoT (bridge_reasoning.stage = 0)
-#   Stage 2 : +Subtask latent  (bridge_reasoning.stage = 2)
-#   Stage 3 : +Reason latent   (bridge_reasoning.stage = 3)
-#   Stage 4 : +BBox latent     (bridge_reasoning.stage = 4)
+# Libero (LeRobot) :: Multi-Stage Training Launcher
+# Runs Stage 1 -> Stage 4 sequentially, loading the previous stage checkpoint.
+#
+# Default stages for BridgeReasoningFormatter:
+#   Stage 1 : all explicit tags
+#   Stage 2 : SUBTASK latent
+#   Stage 3 : SUBTASK + BBOX latent
+#   Stage 4 : SUBTASK + BBOX + REASON latent
+#
+# This script uses a local steps-cache directory to avoid writing into dataset roots.
 # ============================================================================
 set -euo pipefail
 
@@ -24,14 +25,15 @@ export TOKENIZERS_PARALLELISM="${TOKENIZERS_PARALLELISM:-false}"
 # ----------------------------------------------------------------------------
 # Base configuration
 # ----------------------------------------------------------------------------
-CONFIG_PATH="${CONFIG_PATH:-/share/project/lvjing/starVLA/starVLA/config/training/bridge_lerobot_stage2.yaml}"
-RUN_ROOT_DIR="${RUN_ROOT_DIR:-results/BridgeLeRobot_VLM_Final_SDPA5}"
-RUN_ID_PREFIX="${RUN_ID_PREFIX:-bridge_multistage}"
-WANDB_PROJECT="${WANDB_PROJECT:-bridge_multistage_vlm_final_sdpa5}"
+CONFIG_PATH="${CONFIG_PATH:-/share/project/lvjing/starVLA/starVLA/config/training/libero_all_ecot_stage4.yaml}"
+RUN_ROOT_DIR="${RUN_ROOT_DIR:-results/LiberoECOT}"
+RUN_ID_PREFIX="${RUN_ID_PREFIX:-libero_all_multistage}"
+WANDB_PROJECT="${WANDB_PROJECT:-libero_ecot}"
 WANDB_ENTITY="${WANDB_ENTITY:-lvj2114-beijing-academy-of-artificial-intelligence}"
 NUM_GPUS="${NUM_GPUS:-8}"
-MASTER_PORT="${MASTER_PORT:-29512}"
+MASTER_PORT="${MASTER_PORT:-29513}"
 
+# Keep parity with bridge launcher knobs
 USE_REASONING_SUMMARY="${USE_REASONING_SUMMARY:-false}"
 REASONING_SUMMARY_TOKENS="${REASONING_SUMMARY_TOKENS:-2}"
 REASONING_SUMMARY_HEADS="${REASONING_SUMMARY_HEADS:-4}"
@@ -41,21 +43,26 @@ REASONING_FILM_FIRST_K="${REASONING_FILM_FIRST_K:-0}"
 REASONING_FILM_DROPOUT="${REASONING_FILM_DROPOUT:-0.1}"
 REASONING_FILM_HIDDEN="${REASONING_FILM_HIDDEN:-1024}"
 attention_implementation="${attention_implementation:-sdpa}"
-# Staging control
-# STAGES=(1 2 3 4)
-STAGES=(1 2 3 4)
-  START_STAGE="${START_STAGE:-1}"
-  INITIAL_PRETRAINED_CKPT="${INITIAL_PRETRAINED_CKPT:-}"
-CKPT_PRE="${CKPT_PRE:-}"
+
+# Common knobs
 RELOAD_MODULES="${RELOAD_MODULES:-}"
 GLOBAL_STEPS_CACHE_PATH="${STEPS_CACHE_PATH:-}"
 
-# Stage-specific configs (can be adjusted as needed)
+# Local steps cache dir (directory path => one cache file per dataset/config_key)
+STEPS_CACHE_DIR="${STEPS_CACHE_DIR:-${RUN_ROOT_DIR}/steps_cache/libero_all}"
+
+# Stage control
+STAGES=(1 2 3 4)
+START_STAGE="${START_STAGE:-1}"
+INITIAL_PRETRAINED_CKPT="${INITIAL_PRETRAINED_CKPT:-}"
+CKPT_PRE="${CKPT_PRE:-}"
+
+# Stage semantics (match config stages; identity mapping)
 declare -A STAGE_BRIDGE_STAGE=(
-  [1]=1   # full CoT
-  [2]=2   # subtask latent
-  [3]=3   # subtask+reason latent
-  [4]=4   # subtask+reason+bbox latent
+  [1]=1
+  [2]=2
+  [3]=3
+  [4]=4
 )
 declare -A STAGE_SCHEDULED_STAGE=(
   [1]=1
@@ -64,10 +71,10 @@ declare -A STAGE_SCHEDULED_STAGE=(
   [4]=4
 )
 declare -A STAGE_TRAINING_STAGE=(
-  [1]="reasoning_only"
-  [2]="reasoning_only"
-  [3]="reasoning_only"
-  [4]="reasoning_only"
+  [1]="${TRAINING_STAGE:-reasoning_only}"
+  [2]="${TRAINING_STAGE:-reasoning_only}"
+  [3]="${TRAINING_STAGE:-reasoning_only}"
+  [4]="${TRAINING_STAGE:-reasoning_only}"
 )
 declare -A STAGE_VLM_LOSS_WEIGHT=(
   [1]=1.0
@@ -87,40 +94,29 @@ declare -A STAGE_IMG_NEXT_LOSS_WEIGHT=(
 )
 declare -A STAGE_BATCH_SIZE=(
   [1]=12
-  [2]=16
-  [3]=16
+  [2]=12
+  [3]=12
   [4]=16
 )
 declare -A STAGE_MAX_STEPS=(
-  [1]=10000
-  [2]=5000
-  [3]=5000
-  [4]=10000
+  [1]=5000
+  [2]=2000
+  [3]=2000
+  [4]=2000
 )
 declare -A STAGE_SAVE_INTERVAL=(
-  [1]=10000
-  [2]=5000
-  [3]=5000
-  [4]=10000
+  [1]=5000
+  [2]=2000
+  [3]=2000
+  [4]=2000
 )
-declare -A STAGE_CHECKPOINT_EXPORT=(
-  [1]=10000
-  [2]=5000
-  [3]=5000
-  [4]=5000
+declare -A STAGE_EXPORT_STEP=(
+  # The checkpoint step to load for the next stage. By default, match save_interval.
+  [1]=5000
+  [2]=2000
+  [3]=2000
+  [4]=2000
 )
-
-# ----------------------------------------------------------------------------
-# Helpers
-# ----------------------------------------------------------------------------
-default_steps_cache_for_stage() {
-  local scheduled_stage="$1"
-  if (( scheduled_stage <= 3 )); then
-    echo "/share/project/baishuanghao/data/bridge_orig_lerobot/meta/steps_9f926a41b0ba.pkl"
-  else
-    echo "/share/project/baishuanghao/data/bridge_orig_lerobot/meta/steps_45cc68a6124a.pkl"
-  fi
-}
 
 ensure_output_dir() {
   mkdir -p "$1"
@@ -145,22 +141,28 @@ run_stage() {
   local per_device_batch="${STAGE_BATCH_SIZE[$stage]}"
   local max_steps="${STAGE_MAX_STEPS[$stage]}"
   local save_interval="${STAGE_SAVE_INTERVAL[$stage]}"
-  local component_order="SUBTASK,BBOX,REASON"
+  local export_step="${STAGE_EXPORT_STEP[$stage]}"
+  local cot_mode="${COT_MODE:-implicit}"
+  local component_order='[SUBTASK,BBOX,REASON]'
 
   local steps_cache_path
   if [[ -n "${GLOBAL_STEPS_CACHE_PATH}" ]]; then
     steps_cache_path="${GLOBAL_STEPS_CACHE_PATH}"
   else
-    steps_cache_path="$(default_steps_cache_for_stage "${scheduled_stage}")"
+    steps_cache_path="${STEPS_CACHE_DIR}"
   fi
 
   echo "============================================================================"
   echo "Stage ${stage} | bridge_stage=${bridge_stage} | scheduled_stage=${scheduled_stage}"
   echo " Run ID : ${run_id}"
   echo " Output : ${output_dir}"
+  echo " Steps cache : ${steps_cache_path}"
   echo "============================================================================"
 
   TRAIN_CONFIG_ARGS=(
+    --framework.training_stage "${training_stage}"
+    --framework.cot_mode "${cot_mode}"
+    --framework.qwenvl.attn_implementation "${attention_implementation}"
     --trainer.max_train_steps "${max_steps}"
     --trainer.save_interval "${save_interval}"
     --trainer.eval_interval 50000000
@@ -174,6 +176,7 @@ run_stage() {
     --datasets.vla_data.bridge_reasoning.include_action_tokens "true"
     --datasets.vla_data.bridge_reasoning.component_order "${component_order}"
     --datasets.vla_data.bridge_annotations.steps_cache_path "${steps_cache_path}"
+    --datasets.vla_data.bridge_annotations.write_steps_cache "true"
     --framework.action_model.use_reasoning_film "${USE_REASONING_FILM}"
     --framework.action_model.reasoning_film_first_k "${REASONING_FILM_FIRST_K}"
     --framework.action_model.reasoning_film_dropout "${REASONING_FILM_DROPOUT}"
@@ -182,10 +185,8 @@ run_stage() {
     --framework.action_model.reasoning_summary_tokens "${REASONING_SUMMARY_TOKENS}"
     --framework.action_model.reasoning_summary_heads "${REASONING_SUMMARY_HEADS}"
     --framework.action_model.reasoning_summary_dropout "${REASONING_SUMMARY_DROPOUT}"
-    --framework.training_stage "${training_stage}"
     --framework.latent_reasoning.vlm_loss_weight "${vlm_loss_weight}"
     --framework.img_next.loss_weight "${img_next_loss_weight}"
-    --framework.qwenvl.attn_implementation "${attention_implementation}"
   )
 
   if [[ -n "${prev_ckpt}" ]]; then
@@ -214,33 +215,25 @@ run_stage() {
   echo
   "${cmd[@]}"
 
-  local export_step="${STAGE_CHECKPOINT_EXPORT[$stage]}"
   local next_ckpt="${output_dir}/checkpoints/steps_${export_step}_pytorch_model.pt"
   if [[ ! -f "${next_ckpt}" ]]; then
     echo "Expected checkpoint not found for stage ${stage}: ${next_ckpt}"
-    echo "Please check save_interval/export step settings."
     next_ckpt=""
   fi
   LAST_STAGE_CKPT="${next_ckpt}"
 }
-
-# ----------------------------------------------------------------------------
-# Execution
-# ----------------------------------------------------------------------------
 
 previous_ckpt="${CKPT_PRE:-${INITIAL_PRETRAINED_CKPT}}"
 for stage in "${STAGES[@]}"; do
   if (( stage < START_STAGE )); then
     continue
   fi
-
   if (( stage > START_STAGE )) && [[ -z "${previous_ckpt}" ]]; then
     echo "❌ Missing checkpoint for Stage ${stage}. Set INITIAL_PRETRAINED_CKPT or ensure prior stage ran."
     exit 1
   fi
-
   run_stage "${stage}" "${previous_ckpt}"
   previous_ckpt="${LAST_STAGE_CKPT}"
 done
 
-echo "✅ Multi-stage pipeline completed."
+echo "✅ Libero multi-stage pipeline completed."
