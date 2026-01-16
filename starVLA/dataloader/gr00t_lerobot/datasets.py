@@ -26,6 +26,7 @@ See `scripts/load_dataset.py` for examples on how to use these datasets.
 
 import hashlib
 import json
+import os
 from collections import defaultdict
 from pathlib import Path
 from typing import Sequence, Dict, Any
@@ -173,6 +174,16 @@ class LeRobotSingleDataset(Dataset):
         self._modality_keys = self._get_modality_keys()
         self._delta_indices = self._get_delta_indices()
         self.set_transforms_metadata(self.metadata)
+
+        # Debug knob for pause-frame filtering analysis (prints once per dataset instance).
+        # Enable via: `export STARVLA_DEBUG_PAUSE_FILTER=1`
+        self._debug_pause_filter = os.environ.get("STARVLA_DEBUG_PAUSE_FILTER", "").lower() in {
+            "1",
+            "true",
+            "yes",
+            "y",
+        }
+        self._pause_filter_debug_printed = False
 
         # Optional: attach BRIDGE-specific auxiliary annotations if available.
         self.bridge_annotations: BridgeAnnotations | None = None
@@ -703,6 +714,7 @@ class LeRobotSingleDataset(Dataset):
 
             processed_trajectories += 1
             
+            self.delete_pause_frame = False
             if self.delete_pause_frame:
                 # Get position and gripper fields based on available columns
                 delta_position_values, gripper_values = self._get_position_and_gripper_values(data)
@@ -751,6 +763,16 @@ class LeRobotSingleDataset(Dataset):
         """Get position and gripper values based on available columns in the dataset."""
         # Get action keys from modality_keys
         action_keys = self.modality_keys.get('action', [])
+        if self._debug_pause_filter and not self._pause_filter_debug_printed:
+            try:
+                print(f"[PauseFilterDebug] dataset={self.dataset_name} columns={data.columns.tolist()}")
+                print(f"[PauseFilterDebug] dataset={self.dataset_name} action_keys={action_keys}")
+                if getattr(self.lerobot_modality_meta, "action", None) is not None:
+                    print(
+                        f"[PauseFilterDebug] dataset={self.dataset_name} action_meta_keys={list(self.lerobot_modality_meta.action.keys())}"
+                    )
+            except Exception:
+                pass
         
         # Extract position data
         delta_position_values = None
@@ -801,6 +823,33 @@ class LeRobotSingleDataset(Dataset):
             
             if x_data is not None and y_data is not None and z_data is not None:
                 delta_position_values = np.column_stack((x_data, y_data, z_data)).tolist()
+
+        # Real-world datasets may store actions as a single vector column (e.g., "action")
+        # and expose logical slices via modality metadata (e.g., action.left_arm/right_arm).
+        # Use arm slices as a generic "motion" signal for pause-frame filtering.
+        if delta_position_values is None:
+            arm_subkeys = []
+            if "action.left_arm" in action_keys:
+                arm_subkeys.append("left_arm")
+            if "action.right_arm" in action_keys:
+                arm_subkeys.append("right_arm")
+            if arm_subkeys:
+                try:
+                    le_action_cfg = self.lerobot_modality_meta.action
+                    arm_arrays = []
+                    for subkey in arm_subkeys:
+                        if le_action_cfg is None or subkey not in le_action_cfg:
+                            continue
+                        le_key = le_action_cfg[subkey].original_key or subkey
+                        if le_key not in data.columns:
+                            continue
+                        data_array = np.stack(data[le_key])
+                        le_indices = np.arange(le_action_cfg[subkey].start, le_action_cfg[subkey].end)
+                        arm_arrays.append(data_array[:, le_indices])
+                    if arm_arrays:
+                        delta_position_values = np.concatenate(arm_arrays, axis=1).tolist()
+                except Exception:
+                    delta_position_values = None
         
         if delta_position_values is None:
             # Fallback to the old hardcoded approach if metadata approach fails
@@ -833,6 +882,33 @@ class LeRobotSingleDataset(Dataset):
                             break
                 except Exception:
                     continue
+
+        # For dual-arm real data, treat left/right hand as gripper signals if present.
+        if gripper_values is None:
+            hand_subkeys = []
+            if "action.left_hand" in action_keys:
+                hand_subkeys.append("left_hand")
+            if "action.right_hand" in action_keys:
+                hand_subkeys.append("right_hand")
+            if hand_subkeys:
+                try:
+                    le_action_cfg = self.lerobot_modality_meta.action
+                    hand_arrays = []
+                    for subkey in hand_subkeys:
+                        if le_action_cfg is None or subkey not in le_action_cfg:
+                            continue
+                        le_key = le_action_cfg[subkey].original_key or subkey
+                        if le_key not in data.columns:
+                            continue
+                        data_array = np.stack(data[le_key])
+                        le_indices = np.arange(le_action_cfg[subkey].start, le_action_cfg[subkey].end)
+                        hand_arrays.append(data_array[:, le_indices])
+                    if hand_arrays:
+                        gripper_mat = np.concatenate(hand_arrays, axis=1)
+                        # Binarize for stable pause-frame filtering (threshold matches training).
+                        gripper_values = (gripper_mat > 0.05).astype(np.int32).tolist()
+                except Exception:
+                    gripper_values = None
         
         if gripper_values is None:
             # Fallback to the old hardcoded approach if metadata approach fails
@@ -842,6 +918,24 @@ class LeRobotSingleDataset(Dataset):
                 gripper_values = data['action.gripper'].to_numpy().tolist()
             else:
                 raise ValueError(f"No suitable gripper columns found. Available columns: {data.columns.tolist()}")
+
+        if self._debug_pause_filter and not self._pause_filter_debug_printed:
+            try:
+                dp_shape = (
+                    (len(delta_position_values), len(delta_position_values[0]))
+                    if delta_position_values and isinstance(delta_position_values[0], (list, np.ndarray))
+                    else None
+                )
+                if gripper_values and isinstance(gripper_values[0], list):
+                    gv_shape = (len(gripper_values), len(gripper_values[0]))
+                else:
+                    gv_shape = (len(gripper_values),)
+                print(f"[PauseFilterDebug] dataset={self.dataset_name} delta_position_shape={dp_shape} gripper_shape={gv_shape}")
+                if gripper_values:
+                    print(f"[PauseFilterDebug] dataset={self.dataset_name} gripper_sample0={gripper_values[0]}")
+            except Exception:
+                pass
+            self._pause_filter_debug_printed = True
         
         return delta_position_values, gripper_values
 

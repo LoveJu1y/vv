@@ -98,9 +98,10 @@ class RotationTransform:
 class Normalizer:
     valid_modes = ["q99", "mean_std", "min_max", "binary"]
 
-    def __init__(self, mode: str, statistics: dict):
+    def __init__(self, mode: str, statistics: dict, binary_threshold: float = 0.5):
         self.mode = mode
         self.statistics = statistics
+        self.binary_threshold = float(binary_threshold)
         for key, value in self.statistics.items():
             self.statistics[key] = torch.tensor(value)
 
@@ -184,7 +185,7 @@ class Normalizer:
 
         elif self.mode == "binary":
             # Range of binary is [0, 1]
-            normalized = (x > 0.5).to(x.dtype)
+            normalized = (x > self.binary_threshold).to(x.dtype)
         else:
             raise ValueError(f"Invalid normalization mode: {self.mode}")
 
@@ -207,7 +208,7 @@ class Normalizer:
             max = self.statistics["max"].to(x.dtype)
             return (x + 1) / 2 * (max - min) + min
         elif self.mode == "binary":
-            return (x > 0.5).to(x.dtype)
+            return (x > self.binary_threshold).to(x.dtype)
         else:
             raise ValueError(f"Invalid normalization mode: {self.mode}")
 
@@ -290,6 +291,10 @@ class StateActionTransform(InvertibleModalityTransform):
     normalization_modes: dict[str, str] = Field(
         default_factory=dict, description="The normalization modes for each state key."
     )
+    binary_thresholds: dict[str, float] = Field(
+        default_factory=dict,
+        description="Per-key thresholds for `binary` normalization mode (default 0.5).",
+    )
     target_rotations: dict[str, str] = Field(
         default_factory=dict, description="The target representations for each state key."
     )
@@ -327,7 +332,7 @@ class StateActionTransform(InvertibleModalityTransform):
 
     def model_dump(self, *args, **kwargs):
         if kwargs.get("mode", "python") == "json":
-            include = {"apply_to", "normalization_modes", "target_rotations"}
+            include = {"apply_to", "normalization_modes", "binary_thresholds", "target_rotations"}
         else:
             include = kwargs.pop("include", None)
 
@@ -467,7 +472,9 @@ class StateActionTransform(InvertibleModalityTransform):
             else:
                 statistics = self.normalization_statistics[key]
             self._normalizers[key] = Normalizer(
-                mode=self.normalization_modes[key], statistics=statistics
+                mode=self.normalization_modes[key],
+                statistics=statistics,
+                binary_threshold=self.binary_thresholds.get(key, 0.5),
             )
 
     def apply(self, data: dict[str, Any]) -> dict[str, Any]:

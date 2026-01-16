@@ -46,9 +46,15 @@ DATASET_NAMED_MIXTURES = {
         ("bridge_orig_1.0.0_lerobot", 1.0, "oxe_bridge"),
         ("fractal20220817_data_0.1.0_lerobot", 1.0, "oxe_rt1"),
     ],
-
     "demo_sim_pick_place": [
         ("sim_pick_place", 1.0, "demo_sim_franka_delta_joints"),
+    ],
+
+    "agilex_cobot_magic_real4": [
+        ("Agilex_Cobot_Magic_classify_object_fruit", 1.0, "agilex_cobot_magic"),
+        ("Agilex_Cobot_Magic_pour_water_twice", 1.0, "agilex_cobot_magic"),
+        ("Agilex_Cobot_Magic_stack_block_twice", 1.0, "agilex_cobot_magic"),
+        ("Agilex_Cobot_Magic_storage_object_two", 1.0, "agilex_cobot_magic"),
     ],
 
     "custom_dataset": [
