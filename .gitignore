@@ -2,7 +2,7 @@ debug/
 ckpts/
 third_party/
 coconut/
-
+copy/
 # Log folders (evaluation logs)
 *_logs/
 *_logs_*/
