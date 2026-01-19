@@ -56,6 +56,18 @@ DATASET_NAMED_MIXTURES = {
         ("Agilex_Cobot_Magic_stack_block_twice", 1.0, "agilex_cobot_magic"),
         ("Agilex_Cobot_Magic_storage_object_two", 1.0, "agilex_cobot_magic"),
     ],
+    "agilex_cobot_magic_fruit": [
+        ("Agilex_Cobot_Magic_classify_object_fruit", 1.0, "agilex_cobot_magic"),
+    ],
+    "agilex_cobot_magic_pour": [
+        ("Agilex_Cobot_Magic_pour_water_twice", 1.0, "agilex_cobot_magic"),
+    ],
+    "agilex_cobot_magic_stack": [
+        ("Agilex_Cobot_Magic_stack_block_twice", 1.0, "agilex_cobot_magic"),
+    ],
+    "agilex_cobot_magic_storage": [
+        ("Agilex_Cobot_Magic_storage_object_two", 1.0, "agilex_cobot_magic"),
+    ],
 
     "custom_dataset": [
         ("custom_dataset_name", 1.0, "custom_robot_config"),

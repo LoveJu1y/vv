@@ -33,7 +33,8 @@
 #     └── videos/${suite}/...          (SAVE_VIDEOS=true 才写)
 # ============================================================================
 set -euo pipefail
-
+export HF_ENDPOINT=https://hf-mirror.com
+export HF_HOME=/share/project/lvjing/starVLA/qwen_cache
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_ROOT="$(cd "${SCRIPT_DIR}/../.." && pwd)"
 cd "${REPO_ROOT}" || exit 1

@@ -25,14 +25,14 @@ set -euo pipefail
 # export MKL_NUM_THREADS=${MKL_NUM_THREADS:-1}
 # export NUMEXPR_NUM_THREADS=${NUMEXPR_NUM_THREADS:-1}
 
-CKPT_DIR=${1:-/share/project/lvjing/starVLA/results/BridgeFinal_Action/SDPA5_bridge_lerobot_DITB_LR1E-4_LR1E-5_BTS16_60K_FINAL_NO_IMGLOSS__1.3lr/checkpoints}
+CKPT_DIR=${1:-/share/project/lvjing/starVLA/results/BridgeFinal_Action/SDPA5_bridge_lerobot_DITB_LR1E-4_LR1E-5_BTS16_45K_FINAL_NO_IMGLOSS_1.1lr/checkpoints}
 MIN_STEP_ARG=${2:-}
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_ROOT="$(cd "${SCRIPT_DIR}/../.." && pwd)"
 cd "${REPO_ROOT}"
 COT_MODE=${COT_MODE:-implicit}
 IMG_NEXT_COUNT=${IMG_NEXT_COUNT:-16}
-MIN_STEP=${MIN_STEP:-57500}
+MIN_STEP=${MIN_STEP:-20000}
 MAX_STEP=${MAX_STEP:-}
 
 if [[ -n "${MIN_STEP_ARG}" ]]; then

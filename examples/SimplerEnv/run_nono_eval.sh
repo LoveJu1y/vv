@@ -25,7 +25,7 @@ set -euo pipefail
 # export MKL_NUM_THREADS=${MKL_NUM_THREADS:-1}
 # export NUMEXPR_NUM_THREADS=${NUMEXPR_NUM_THREADS:-1}
 
-CKPT_DIR=${1:-/share/project/lvjing/starVLA/results/BridgeFinal_Action/bridge_none_stage0/checkpoints}
+CKPT_DIR=${1:-/share/project/lvjing/starVLA/results/BridgeFinal_Action/bridge_none_stage0_final1/checkpoints}
 MIN_STEP_ARG=${2:-}
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_ROOT="$(cd "${SCRIPT_DIR}/../.." && pwd)"

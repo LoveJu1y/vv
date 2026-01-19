@@ -32,7 +32,7 @@ REPO_ROOT="$(cd "${SCRIPT_DIR}/../.." && pwd)"
 cd "${REPO_ROOT}"
 COT_MODE=${COT_MODE:-explicit}
 IMG_NEXT_COUNT=${IMG_NEXT_COUNT:-0}
-MIN_STEP=${MIN_STEP:-45000}
+MIN_STEP=${MIN_STEP:-30000}
 MAX_STEP=${MAX_STEP:-}
 
 if [[ -n "${MIN_STEP_ARG}" ]]; then

@@ -464,8 +464,9 @@ BRIDGE_REASONING_DEFAULTS = {
 BRIDGE_BASE_PROMPT = (
     "You are doing A action in a robot task. First output the target bbox, then list the subtask, then generate the motion reasoning. last, you are required to output the next frame in latent space. Instruction:"
 )
-
-
+BRIDGE_BASE_PROMPT_2 = (
+    "Robot task reasoning: first output the Subtask to preform next, then output the BBox of target object, then generate the Motion Reasoning. Instruction:"
+)
 def extract_bridge_reasoning_settings(config: Optional[dict]) -> dict:
     settings = copy.deepcopy(BRIDGE_REASONING_DEFAULTS)
     if not config:

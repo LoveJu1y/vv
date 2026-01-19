@@ -596,7 +596,7 @@ class AgilexCobotMagicDataConfig:
     video_keys = [
         "video.ego_view",
         # "video.left_view",
-        # "video.right_view",
+        "video.right_view",
     ]
     state_keys = [
         "state.left_arm",

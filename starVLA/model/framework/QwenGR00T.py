@@ -444,6 +444,11 @@ class Qwen_GR00T(baseframework):
         dump_img_next_embeddings = bool(cfg.get("dump_img_next_embeddings", False))
         embeddings_dtype = str(cfg.get("embeddings_dtype", "float16") or "float16").lower()
         embeddings_subdir = str(cfg.get("embeddings_subdir", "embeddings") or "embeddings")
+        # Dedupe controls (reduce repeated instruction logging).
+        unique_in_batch = bool(cfg.get("unique_in_batch", True))
+        dedupe_across_run = bool(cfg.get("dedupe_across_run", False))
+        max_seen_instructions = int(cfg.get("max_seen_instructions", 50000) or 50000)
+        log_saved_instruction_count = bool(cfg.get("log_saved_instruction_count", False))
         dump_dir = getattr(self, "_latent_analysis_dump_dir", None)
         if not dump_dir:
             dump_dir = str(cfg.get("dump_dir") or "")
@@ -469,7 +474,6 @@ class Qwen_GR00T(baseframework):
         img_next_token_id = getattr(self.qwen_vl_interface, "img_next_token_id", None)
 
         B = int(input_ids.shape[0])
-        sample_cap = min(B, max_samples)
 
         def _base_instruction(text: str) -> str:
             t = (text or "").strip()
@@ -480,10 +484,12 @@ class Qwen_GR00T(baseframework):
         # --- per-sample stats ---
         rows = []
         # Optional: dump embeddings for PCA/UMAP later (store only the needed token vectors).
-        think_vec_bank = None
-        img_vec_bank = None
-        think_mask_bank = None
-        img_mask_bank = None
+        think_vec_list: List[torch.Tensor] = []
+        think_mask_list: List[torch.Tensor] = []
+        img_vec_list: List[torch.Tensor] = []
+        img_mask_list: List[torch.Tensor] = []
+        input_ids_list: List[torch.Tensor] = []
+        attention_mask_list: List[torch.Tensor] = []
 
         def _cast_dtype(x: torch.Tensor) -> torch.Tensor:
             if embeddings_dtype in ("fp16", "float16", "half"):
@@ -492,15 +498,28 @@ class Qwen_GR00T(baseframework):
                 return x.to(dtype=torch.bfloat16)
             return x.to(dtype=torch.float32)
 
-        if dump_embeddings:
-            H = int(last_hidden.shape[-1])
-            think_vec_bank = torch.zeros((sample_cap, max_latents, H), dtype=torch.float16, device="cpu")
-            think_mask_bank = torch.zeros((sample_cap, max_latents), dtype=torch.bool, device="cpu")
-            if dump_img_next_embeddings and img_next_token_id is not None and max_img_next > 0:
-                img_vec_bank = torch.zeros((sample_cap, max_img_next, H), dtype=torch.float16, device="cpu")
-                img_mask_bank = torch.zeros((sample_cap, max_img_next), dtype=torch.bool, device="cpu")
+        # Track seen instructions to reduce duplicates.
+        batch_seen: set[str] = set()
+        if dedupe_across_run:
+            if not hasattr(self, "_latent_analysis_seen_instr"):
+                self._latent_analysis_seen_instr = set()
+            # If we've reached the cap, stop saving further analysis to avoid unbounded growth.
+            if getattr(self, "_latent_analysis_stop_saving", False):
+                return
+            if max_seen_instructions > 0 and len(self._latent_analysis_seen_instr) >= max_seen_instructions:
+                if not getattr(self, "_latent_analysis_dedupe_overflow_warned", False):
+                    logger.warning(
+                        "[latent_analysis] max_seen_instructions=%s reached (seen=%s); stop saving further analysis.",
+                        max_seen_instructions,
+                        len(self._latent_analysis_seen_instr),
+                    )
+                    self._latent_analysis_dedupe_overflow_warned = True
+                self._latent_analysis_stop_saving = True
+                return
 
-        for b in range(sample_cap):
+        for b in range(B):
+            if len(rows) >= max_samples:
+                break
             row = {
                 "global_step": int(global_step),
                 "batch_index": int(b),
@@ -512,6 +531,15 @@ class Qwen_GR00T(baseframework):
             base = _base_instruction(instr)
             row["instruction"] = base[:200]
             row["instruction_sha1"] = hashlib.sha1(base.encode("utf-8")).hexdigest()  # stable task key
+
+            sha1 = row["instruction_sha1"]
+            if unique_in_batch and sha1 in batch_seen:
+                continue
+            if dedupe_across_run and sha1 in getattr(self, "_latent_analysis_seen_instr", set()):
+                continue
+            batch_seen.add(sha1)
+            if dedupe_across_run:
+                self._latent_analysis_seen_instr.add(sha1)
 
             if vlm_outputs is not None:
                 try:
@@ -550,10 +578,16 @@ class Qwen_GR00T(baseframework):
                     row["thinking_cos_12"] = float(cos[1, 2].item())
                     row["thinking_cos_02"] = float(cos[0, 2].item())
 
-                if dump_embeddings and think_vec_bank is not None and think_mask_bank is not None:
+                if dump_embeddings:
+                    H = int(last_hidden.shape[-1])
                     token_count = min(len(think_positions), max_latents)
-                    think_vec_bank[b, :token_count, :] = _cast_dtype(vecs[:token_count]).cpu()
-                    think_mask_bank[b, :token_count] = True
+                    vec_pad = torch.zeros((max_latents, H), dtype=torch.float32, device=vecs.device)
+                    mask_pad = torch.zeros((max_latents,), dtype=torch.bool, device=vecs.device)
+                    if token_count > 0:
+                        vec_pad[:token_count, :] = vecs[:token_count]
+                        mask_pad[:token_count] = True
+                    think_vec_list.append(_cast_dtype(vec_pad).cpu())
+                    think_mask_list.append(mask_pad.cpu())
 
             # img_next tokens (optional, for alignment sanity)
             img_positions = []
@@ -565,13 +599,48 @@ class Qwen_GR00T(baseframework):
             row["img_next_count"] = int((input_ids[b] == int(img_next_token_id)).sum().item()) if img_next_token_id is not None else 0
             row["img_next_positions_head"] = img_positions
 
-            if dump_embeddings and dump_img_next_embeddings and img_vec_bank is not None and img_mask_bank is not None and img_positions:
-                vecs = last_hidden[b, torch.tensor(img_positions, device=last_hidden.device), :].detach().float()
+            if dump_embeddings:
+                # Keep alignment tensors for offline reproduction.
+                input_ids_list.append(input_ids[b].detach().cpu())
+                if attention_mask is not None:
+                    attention_mask_list.append(attention_mask[b].detach().cpu())
+
+            if dump_embeddings and dump_img_next_embeddings and img_next_token_id is not None:
+                H = int(last_hidden.shape[-1])
                 token_count = min(len(img_positions), max_img_next)
-                img_vec_bank[b, :token_count, :] = _cast_dtype(vecs[:token_count]).cpu()
-                img_mask_bank[b, :token_count] = True
+                vec_pad = torch.zeros((max_img_next, H), dtype=torch.float32, device=last_hidden.device)
+                mask_pad = torch.zeros((max_img_next,), dtype=torch.bool, device=last_hidden.device)
+                if token_count > 0:
+                    vecs = last_hidden[b, torch.tensor(img_positions, device=last_hidden.device), :].detach().float()
+                    vec_pad[:token_count, :] = vecs[:token_count]
+                    mask_pad[:token_count] = True
+                img_vec_list.append(_cast_dtype(vec_pad).cpu())
+                img_mask_list.append(mask_pad.cpu())
 
             rows.append(row)
+
+        # If all samples were filtered out, do nothing.
+        if not rows:
+            return
+
+        if log_saved_instruction_count:
+            try:
+                total_seen = (
+                    len(getattr(self, "_latent_analysis_seen_instr", set()))
+                    if dedupe_across_run
+                    else None
+                )
+            except Exception:
+                total_seen = None
+            logger.info(
+                "[latent_analysis] saved_rows=%s unique_in_batch=%s dedupe_across_run=%s total_seen=%s step=%s",
+                len(rows),
+                unique_in_batch,
+                dedupe_across_run,
+                total_seen,
+                int(global_step),
+            )
+            print(f"[latent_analysis] saved_rows={len(rows)} unique_in_batch={unique_in_batch} dedupe_across_run={dedupe_across_run} total_seen={total_seen} step={int(global_step)}")
 
         # Append to jsonl
         out_path = os.path.join(str(dump_dir), "latent_stats.jsonl")
@@ -580,10 +649,10 @@ class Qwen_GR00T(baseframework):
                 for r in rows:
                     f.write(json.dumps(r, ensure_ascii=False) + "\n")
         except Exception as exc:
-            logger.warning(f"[latent_analysis] failed to write stats: {exc}")
+                logger.warning(f"[latent_analysis] failed to write stats: {exc}")
 
         # Optional: dump token embeddings for later PCA/UMAP (one file per trigger).
-        if dump_embeddings and think_vec_bank is not None and think_mask_bank is not None:
+        if dump_embeddings and think_vec_list and think_mask_list:
             emb_dir = os.path.join(str(dump_dir), embeddings_subdir)
             try:
                 os.makedirs(emb_dir, exist_ok=True)
@@ -596,18 +665,18 @@ class Qwen_GR00T(baseframework):
                 "use_iterative_forward": bool(use_iterative_forward),
                 "cot_mode": str(getattr(self.config.framework, "cot_mode", "implicit")) if self.config is not None else "unknown",
                 "rows": rows,  # small meta, includes instruction_sha1 and positions
-                "thinking_vecs": think_vec_bank,          # [N, K, H]
-                "thinking_mask": think_mask_bank,         # [N, K]
+                "thinking_vecs": torch.stack(think_vec_list, dim=0),   # [N, K, H]
+                "thinking_mask": torch.stack(think_mask_list, dim=0),  # [N, K]
             }
-            if dump_img_next_embeddings and img_vec_bank is not None and img_mask_bank is not None:
-                payload["img_next_vecs"] = img_vec_bank   # [N, M, H]
-                payload["img_next_mask"] = img_mask_bank  # [N, M]
+            if dump_img_next_embeddings and img_vec_list and img_mask_list:
+                payload["img_next_vecs"] = torch.stack(img_vec_list, dim=0)   # [N, M, H]
+                payload["img_next_mask"] = torch.stack(img_mask_list, dim=0)  # [N, M]
 
             # Keep input_ids/attention_mask for exact alignment reproduction in offline analysis.
             try:
-                payload["input_ids"] = input_ids[:sample_cap].detach().cpu()
-                if attention_mask is not None:
-                    payload["attention_mask"] = attention_mask[:sample_cap].detach().cpu()
+                payload["input_ids"] = torch.stack(input_ids_list, dim=0) if input_ids_list else input_ids[: len(rows)].detach().cpu()
+                if attention_mask is not None and attention_mask_list:
+                    payload["attention_mask"] = torch.stack(attention_mask_list, dim=0)
             except Exception:
                 pass
 
@@ -794,6 +863,7 @@ class Qwen_GR00T(baseframework):
             batch_images = resize_images(batch_images, target_size=train_obs_image_size)
     
         # 推理模式与超参
+        print(f"instructions: {instructions}")
         cot_mode = kwargs.get("cot_mode", "implicit")
         emit_thinking_tokens = kwargs.get("emit_thinking_tokens", False)
         think_max_len = kwargs.get("think_max_len", 64)
@@ -872,6 +942,7 @@ class Qwen_GR00T(baseframework):
                     output_hidden_states=True,
                     return_dict=True,
                 )
+                print(qwen_inputs["input_ids"])
                 # last_hidden_state: [B, seq_len, H]
                 last_hidden = qwenvl_outputs.hidden_states[-1]   # [B, L, H]
 

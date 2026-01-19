@@ -24,8 +24,9 @@
 #   STOP_ON_FAIL           true/false (default false; continue on failure)
 # ============================================================================
 set -euo pipefail
-
-CKPT_DIR="${1:-/share/project/lvjing/starVLA/results/LiberoECOT_final/libero_all_DITB_LR1E-4_LR1E-5_BTS14_40K_1.2lr/checkpoints}"
+export HF_ENDPOINT=https://hf-mirror.com
+export HF_HOME=/share/project/lvjing/starVLA/qwen_cache
+CKPT_DIR="${1:-/share/project/lvjing/starVLA/results/LiberoECOT_final/libero_all_DITB_LR1E-4_LR1E-5_BTS14_40K_1.1lr/checkpoints}"
 MIN_STEP_ARG="${2:-}"
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"

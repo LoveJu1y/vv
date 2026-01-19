@@ -71,7 +71,7 @@ framework:
     token: "<img_next>"
     loss_weight: 0.1
     res: 112  # 112x112 输入，经 2x2 merge 得 16 token
-    use_teacher: true
+    use_teacher: false
   qwenvl:
     base_vlm: "StarVLA/Qwen3-VL-4B-Instruct-Action"
     attn_implementation: "sdpa"
@@ -123,10 +123,18 @@ trainer:
   eval_interval: 500
   latent_analysis:
     enable: false
-    interval_steps: 5
-    max_samples: 4
+    interval_steps: 1
+    max_samples: 32
     max_latents: 3
-    max_img_next: 16
+    max_img_next: 32
+    # Dedupe: keep only unique instructions to reduce repeated samples.
+    # - unique_in_batch: ensures we don't log the same instruction twice within one trigger.
+    # - dedupe_across_run: ensures we don't keep logging an instruction we've already logged before.
+    unique_in_batch: true
+    dedupe_across_run: true
+    max_seen_instructions: 1000
+    # If true, log how many unique instructions have been saved so far.
+    log_saved_instruction_count: true
     # If true, additionally dump thinking token vectors for PCA/UMAP and probing.
     # The dump is one file per trigger under `${output_dir}/latent_analysis/${embeddings_subdir}/`.
     dump_embeddings: false
