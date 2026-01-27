@@ -26,7 +26,7 @@ from geometry_msgs.msg import Twist
 from sensor_msgs.msg import JointState, Image
 from nav_msgs.msg import Odometry
 from cv_bridge import CvBridge
-from utils import compute_dict_mean, set_seed, detach_dict # helper functions
+# from utils import compute_dict_mean, set_seed, detach_dict # helper functions
 
 from typing import Dict
 from PIL import Image as PIL_Image
@@ -73,6 +73,74 @@ def actions_interpolation(args, pre_action, actions, stats):
     return result
 
 
+def _expand_arm_steps_to_14(arm_steps_length) -> np.ndarray:
+    """
+    Convert CLI `arm_steps_length` (usually 7 dims for one arm) to a 14-dim per-joint step limit
+    by duplicating for left/right arms.
+    """
+    steps = np.asarray(arm_steps_length, dtype=np.float32).reshape(-1)
+    if steps.size == 7:
+        steps = np.concatenate([steps, steps], axis=0)
+    return steps
+
+
+
+def apply_step_limit_to_joint_targets(
+    current_qpos_14: np.ndarray,
+    target_qpos_seq_14: np.ndarray,
+    per_joint_step_14: np.ndarray,
+) -> np.ndarray:
+    """
+    Interpolate absolute joint targets by inserting extra waypoints when needed.
+
+    For each target in the input sequence, we generate 1 or more intermediate
+    joint targets such that the per-joint delta per published step is bounded
+    by `per_joint_step_14`, and the final waypoint exactly reaches the target.
+    """
+    cur = np.asarray(current_qpos_14, dtype=np.float32).reshape(-1)
+    targets = np.asarray(target_qpos_seq_14, dtype=np.float32)
+    steps = np.asarray(per_joint_step_14, dtype=np.float32).reshape(-1)
+    if cur.size != 14 or targets.ndim != 2 or targets.shape[1] != 14 or steps.size != 14:
+        return targets  # fail-safe: don't alter
+
+    # Avoid zero/negative steps (would stall interpolation).
+    steps = np.maximum(np.abs(steps), 1e-8)
+
+    out_list = []
+    eps = 1e-6
+    max_substeps_per_target = 2000  # hard safety cap
+
+    for i in range(targets.shape[0]):
+        target = targets[i]
+        # Insert intermediate points until we can reach the target within one bounded step.
+        substeps = 0
+        while True:
+            delta = target - cur
+            if np.all(np.abs(delta) <= (steps + eps)):
+                # Final step: reach target exactly.
+                cur = target.astype(np.float32, copy=False)
+                # Avoid adding duplicate consecutive points.
+                if len(out_list) == 0 or not np.allclose(out_list[-1], cur, atol=1e-8, rtol=0.0):
+                    out_list.append(cur.copy())
+                break
+
+            move = np.clip(delta, -steps, steps)
+            cur = (cur + move).astype(np.float32, copy=False)
+            out_list.append(cur.copy())
+
+            substeps += 1
+            if substeps >= max_substeps_per_target:
+                # Fail-safe: if something is wrong (NaNs, extremely tiny steps), stop expanding.
+                # Best effort: append the original target and proceed.
+                cur = target.astype(np.float32, copy=False)
+                out_list.append(cur.copy())
+                break
+
+    if len(out_list) == 0:
+        return targets
+    return np.stack(out_list, axis=0).astype(np.float32, copy=False)
+
+
 def get_image(observation, camera_names):
     curr_images = []
     for cam_name in camera_names:
@@ -97,7 +165,7 @@ def unnormalize_actions_q01_q99_with_gripper(
     normalized_actions: np.ndarray,
     action_norm_stats: Dict[str, np.ndarray],
     gripper_idxs=(6, 13),
-    gripper_open_value=0.08,
+    gripper_open_value=0.09,
     threshold=0.5,
 ) -> np.ndarray:
     """
@@ -115,7 +183,7 @@ def unnormalize_actions_q01_q99_with_gripper(
     mask = np.asarray(action_norm_stats.get("mask", np.ones_like(q01, dtype=bool)), dtype=bool).copy()
 
     # 1) clip 到 [-1, 1]
-    # x = np.clip(x, -1.0, 1.0)
+    x = np.clip(x, -1.0, 1.0)
 
     # 2) 先做 gripper 二值映射（注意：这里在 normalized space 上阈值）
     for idx in gripper_idxs:
@@ -275,22 +343,24 @@ def model_inference(args, ros_operator):
     global inference_actions
     global inference_timestep
     global inference_thread
-    set_seed(1000)
+    # set_seed(1000)
 
     # 1 创建模型、统计值
     # model_path = "/media/agilex/Entertain/starvla/pretrained_models_real_world/muti-task/BAAI_real_world_2B/starvla_qwen_gr00t/checkpoints/steps_20000_pytorch_model.pt"
     # model_path = "/media/agilex/Entertain/starvla/pretrained_models_real_world/single-task/BAAI_real_world_pour_water_2B/starvla_qwen_gr00t/checkpoints/steps_15000_pytorch_model.pt"
     # model_path = "/media/agilex/Entertain/starvla/pretrained_models_real_world/single-task/BAAI_real_world_storage_banana_right_2B/starvla_qwen_gr00t/checkpoints/steps_15000_pytorch_model.pt"
     model_path = "/media/agilex/Entertain/starvla/pretrained_models_real_world/single-task/BAAI_real_world_storage_banana_right_2B/starvla_qwen_oft/checkpoints/steps_10000_pytorch_model.pt"
+    model_path = "/media/agilex/Entertain/Latent_vla/ALLtask/steps_20000_pytorch_model.pt"
+    # model_path = "/media/agilex/E/lvjing/pour_results/root/starVLA/results/AgilexCobotMagic_single/agilex_cobot_magic_single_pour/checkpoints/steps_5000_pytorch_model.pt"
     infer_model = baseframework.from_pretrained(model_path)
     # instruction = ["Erase the whiteboard with an eraser"]
     # instruction = ["Fold the towel with dual arms"]
     # instruction = ["Pour water into the cup"]
     # instruction = ["Stack block"]
-    instruction = ["Put the banana into the basket"]
+    # instruction = ["Put the banana into the basket"]
 
     # instruction = ["Put all fruits into the basket"]
-    # instruction = ["Pour water into two cups"]
+    instruction = ["Pour water into two cups"]
     # instruction = ["Stack two blocks"]
     # instruction = ["Put all objects into the basket"]
 
@@ -328,17 +398,35 @@ def model_inference(args, ros_operator):
     # 推理
     t = 0
     rate = rospy.Rate(args.publish_rate)
+    for_next = None
     with torch.inference_mode():
         while True and not rospy.is_shutdown():
             # start_time = time.time()       
             result = ros_operator.get_frame()
             (img_front, img_left, img_right, img_front_depth, img_left_depth, img_right_depth, puppet_arm_left, puppet_arm_right, robot_base) = result
 
+            import matplotlib.pyplot as plt
+            
+            # img_front_rgb = cv2.cvtColor(img_front, cv2.COLOR_BGR2RGB) # 转RGB供Matplotlib使用
+            # img_front_rgb = img_front
+            # # 2. 绘制图像（必须先绘制，再保存）
+            # plt.figure(figsize=(8, 6)) # 设置画布大小
+            # plt.imshow(img_front_rgb) # 把图像画到画布上
+            # plt.axis('off') # 隐藏坐标轴（可选，更美观）
+            # plt.title('Front Image') # 可选：添加标题
+            # plt.savefig('1.jpg', dpi=150, bbox_inches='tight')
+            # img_right_rgb = img_front
+            # 2. 绘制图像（必须先绘制，再保存）
+            # plt.figure(figsize=(8, 6)) # 设置画布大小
+            # plt.imshow(img_front_rgb) # 把图像画到画布上
+            # plt.axis('off') # 隐藏坐标轴（可选，更美观）
+            # plt.title('right Image') # 可选：添加标题
+            # plt.savefig('2.jpg', dpi=150, bbox_inches='tight')
             img_front = ensure_pil_at_size(img_front)
             img_left  = ensure_pil_at_size(img_left)
             img_right = ensure_pil_at_size(img_right)
             
-            batch_images = [[img_front, img_left, img_right]]
+            batch_images = [[img_front]]
 
             # Explicitly pass inference mode flags (server-side SimplerEnv does the same).
             pred_out = infer_model.predict_action(
@@ -353,21 +441,61 @@ def model_inference(args, ros_operator):
             )
             action_pred = pred_out["normalized_actions"][0]
             raw_actions = unnormalize_actions_q01_q99_with_gripper(action_pred, action_norm_stats)
-            raw_actions = raw_actions[:25]
+            for_next = raw_actions
+            # if t!= 0:
+            #     raw_actions[:10] = for_next[40:] 
+            raw_actions = raw_actions[:50]
+
+            # Optional: step-limit smoothing for absolute joint targets (Choice A).
+            # Uses current smeasured qpos as the starting point and clamps per-joint delta
+            # by `arm_steps_length` (7 dims per arm, duplicated to 14).
+            if getattr(args, "use_actions_interpolation", False):
+                try:
+                    cur_left = np.asarray(puppet_arm_left.position, dtype=np.float32).reshape(-1)
+                    cur_right = np.asarray(puppet_arm_right.position, dtype=np.float32).reshape(-1)
+                    current_qpos = np.concatenate([cur_left, cur_right], axis=0)
+                    step_14 = _expand_arm_steps_to_14(getattr(args, "arm_steps_length", [0.01] * 7))
+                    if step_14.size == 14 and current_qpos.size == 14:
+                        raw_actions = apply_step_limit_to_joint_targets(current_qpos, raw_actions, step_14)
+                except Exception:
+                    # fail-safe: keep raw_actions unchanged
+                    pass
 
             # actions_chunk = actions[t: t+25]
             for action in np.array(raw_actions):
             # for action in np.array(actions_chunk):
                 # left_action = action[:7].copy() 
                 right_action = action[7:14].copy()
-                left_action = [0., 0., 0., 0., 0., 0., 0.08]
+                left_action = left0
                 # input("Enter any key to continue:")
                 ros_operator.puppet_arm_publish(right_action, left_action)  # puppet_arm_publish_continuous_thread
                 t += 1
                 # print("publish: ", t)
                 # print("left_action:", left_action)
-                # print("right_action:", right_action)
+                print("right_action:", right_action)
                 rate.sleep()
+                rate.sleep()
+                # rate.sleep()
+                # rate.sleep()
+
+                
+            rate.sleep()
+            # time.sleep(0.1)
+            rate.sleep()
+            rate.sleep()
+            rate.sleep()
+            # rate.sleep()
+            # rate.sleep()
+            # rate.sleep()
+            # rate.sleep()
+            # rate.sleep()
+            # rate.sleep()
+            # rate.sleep()
+            # rate.sleep()
+            # rate.sleep()
+            # rate.sleep()
+            # rate.sleep()
+            # rate.sleep()
             # end_time = time.time()
             # print("time:", end_time - start_time)
 
@@ -479,7 +607,7 @@ class RosOperator:
 
     def puppet_arm_publish_linear(self, left, right):
         num_step = 100
-        rate = rospy.Rate(200)
+        rate = rospy.Rate(30)
 
         left_arm = None
         right_arm = None
@@ -522,15 +650,112 @@ class RosOperator:
         self.puppet_arm_publish_thread = threading.Thread(target=self.puppet_arm_publish_continuous, args=(left, right))
         self.puppet_arm_publish_thread.start()
 
+
     def get_frame(self):
-        if len(self.img_left_deque) == 0 or len(self.img_right_deque) == 0 or len(self.img_front_deque) == 0 or \
-                (self.args.use_depth_image and (len(self.img_left_depth_deque) == 0 or len(self.img_right_depth_deque) == 0 or len(self.img_front_depth_deque) == 0)):
+        # ---- basic availability ----
+        if (
+            len(self.img_left_deque) == 0
+            or len(self.img_right_deque) == 0
+            or len(self.img_front_deque) == 0
+            or len(self.puppet_arm_left_deque) == 0
+            or len(self.puppet_arm_right_deque) == 0
+            or (
+                self.args.use_depth_image
+                and (
+                    len(self.img_left_depth_deque) == 0
+                    or len(self.img_right_depth_deque) == 0
+                    or len(self.img_front_depth_deque) == 0
+                )
+            )
+            or (self.args.use_robot_base and len(self.robot_base_deque) == 0)
+        ):
             return False
+
+        # Two modes:
+        # - latest: always return the latest messages (best for "I want the newest frame right now")
+        # - sync: return a roughly time-aligned packet using timestamp-based dropping (safer alignment)
+        frame_mode = getattr(self.args, "frame_mode", "latest") or "latest"
+        frame_mode = str(frame_mode).lower()
+
+        def _keep_last(dq):
+            while len(dq) > 1:
+                dq.popleft()
+
+        if frame_mode == "latest":
+            # Drain queues to keep only the latest sample, so we don't accidentally return stale frames
+            # after long open-loop execution windows.
+            _keep_last(self.img_left_deque)
+            _keep_last(self.img_right_deque)
+            _keep_last(self.img_front_deque)
+            _keep_last(self.puppet_arm_left_deque)
+            _keep_last(self.puppet_arm_right_deque)
+            if self.args.use_depth_image:
+                _keep_last(self.img_left_depth_deque)
+                _keep_last(self.img_right_depth_deque)
+                _keep_last(self.img_front_depth_deque)
+            if self.args.use_robot_base:
+                _keep_last(self.robot_base_deque)
+
+            msg_left = self.img_left_deque[-1]
+            msg_right = self.img_right_deque[-1]
+            msg_front = self.img_front_deque[-1]
+            msg_arm_left = self.puppet_arm_left_deque[-1]
+            msg_arm_right = self.puppet_arm_right_deque[-1]
+
+            img_left = self.bridge.imgmsg_to_cv2(msg_left, 'passthrough')
+            img_right = self.bridge.imgmsg_to_cv2(msg_right, 'passthrough')
+            img_front = self.bridge.imgmsg_to_cv2(msg_front, 'passthrough')
+
+            img_left_depth = None
+            img_right_depth = None
+            img_front_depth = None
+            if self.args.use_depth_image:
+                msg_left_d = self.img_left_depth_deque[-1]
+                msg_right_d = self.img_right_depth_deque[-1]
+                msg_front_d = self.img_front_depth_deque[-1]
+                img_left_depth = self.bridge.imgmsg_to_cv2(msg_left_d, 'passthrough')
+                img_right_depth = self.bridge.imgmsg_to_cv2(msg_right_d, 'passthrough')
+                img_front_depth = self.bridge.imgmsg_to_cv2(msg_front_d, 'passthrough')
+
+            robot_base = None
+            if self.args.use_robot_base:
+                robot_base = self.robot_base_deque[-1]
+
+            return (
+                img_front,
+                img_left,
+                img_right,
+                img_front_depth,
+                img_left_depth,
+                img_right_depth,
+                msg_arm_left,
+                msg_arm_right,
+                robot_base,
+            )
+
+        # ---- sync mode: synchronization target time ----
+        # Use the minimum of the latest timestamps across ALL required modalities.
+        # This ensures every modality has at least one message at/after `frame_time`,
+        # avoiding frequent return False when joints lag behind cameras.
+        latest_times = [
+            self.img_left_deque[-1].header.stamp.to_sec(),
+            self.img_right_deque[-1].header.stamp.to_sec(),
+            self.img_front_deque[-1].header.stamp.to_sec(),
+            self.puppet_arm_left_deque[-1].header.stamp.to_sec(),
+            self.puppet_arm_right_deque[-1].header.stamp.to_sec(),
+        ]
         if self.args.use_depth_image:
-            frame_time = min([self.img_left_deque[-1].header.stamp.to_sec(), self.img_right_deque[-1].header.stamp.to_sec(), self.img_front_deque[-1].header.stamp.to_sec(),
-                              self.img_left_depth_deque[-1].header.stamp.to_sec(), self.img_right_depth_deque[-1].header.stamp.to_sec(), self.img_front_depth_deque[-1].header.stamp.to_sec()])
-        else:
-            frame_time = min([self.img_left_deque[-1].header.stamp.to_sec(), self.img_right_deque[-1].header.stamp.to_sec(), self.img_front_deque[-1].header.stamp.to_sec()])
+            latest_times.extend(
+                [
+                    self.img_left_depth_deque[-1].header.stamp.to_sec(),
+                    self.img_right_depth_deque[-1].header.stamp.to_sec(),
+                    self.img_front_depth_deque[-1].header.stamp.to_sec(),
+                ]
+            )
+        if self.args.use_robot_base:
+            latest_times.append(self.robot_base_deque[-1].header.stamp.to_sec())
+
+        frame_time = min(latest_times)
 
         if len(self.img_left_deque) == 0 or self.img_left_deque[-1].header.stamp.to_sec() < frame_time:
             return False
@@ -551,53 +776,60 @@ class RosOperator:
         if self.args.use_robot_base and (len(self.robot_base_deque) == 0 or self.robot_base_deque[-1].header.stamp.to_sec() < frame_time):
             return False
 
-        while self.img_left_deque[0].header.stamp.to_sec() < frame_time:
-            self.img_left_deque.popleft()
-        img_left = self.bridge.imgmsg_to_cv2(self.img_left_deque.popleft(), 'passthrough')
+        # Helper: drop older messages and then take the first >= frame_time.
+        def _pop_synced(dq):
+            while len(dq) > 0 and dq[0].header.stamp.to_sec() < frame_time:
+                dq.popleft()
+            if len(dq) == 0:
+                return None
+            return dq.popleft()
 
-        while self.img_right_deque[0].header.stamp.to_sec() < frame_time:
-            self.img_right_deque.popleft()
-        img_right = self.bridge.imgmsg_to_cv2(self.img_right_deque.popleft(), 'passthrough')
+        msg_left = _pop_synced(self.img_left_deque)
+        msg_right = _pop_synced(self.img_right_deque)
+        msg_front = _pop_synced(self.img_front_deque)
+        msg_arm_left = _pop_synced(self.puppet_arm_left_deque)
+        msg_arm_right = _pop_synced(self.puppet_arm_right_deque)
 
-        while self.img_front_deque[0].header.stamp.to_sec() < frame_time:
-            self.img_front_deque.popleft()
-        img_front = self.bridge.imgmsg_to_cv2(self.img_front_deque.popleft(), 'passthrough')
+        if (
+            msg_left is None
+            or msg_right is None
+            or msg_front is None
+            or msg_arm_left is None
+            or msg_arm_right is None
+        ):
+            return False
 
-        while self.puppet_arm_left_deque[0].header.stamp.to_sec() < frame_time:
-            self.puppet_arm_left_deque.popleft()
-        puppet_arm_left = self.puppet_arm_left_deque.popleft()
+        img_left = self.bridge.imgmsg_to_cv2(msg_left, 'passthrough')
 
-        while self.puppet_arm_right_deque[0].header.stamp.to_sec() < frame_time:
-            self.puppet_arm_right_deque.popleft()
-        puppet_arm_right = self.puppet_arm_right_deque.popleft()
+        img_right = self.bridge.imgmsg_to_cv2(msg_right, 'passthrough')
+
+        img_front = self.bridge.imgmsg_to_cv2(msg_front, 'passthrough')
+
+        puppet_arm_left = msg_arm_left
+        puppet_arm_right = msg_arm_right
 
         img_left_depth = None
-        if self.args.use_depth_image:
-            while self.img_left_depth_deque[0].header.stamp.to_sec() < frame_time:
-                self.img_left_depth_deque.popleft()
-            img_left_depth = self.bridge.imgmsg_to_cv2(self.img_left_depth_deque.popleft(), 'passthrough')
-
         img_right_depth = None
-        if self.args.use_depth_image:
-            while self.img_right_depth_deque[0].header.stamp.to_sec() < frame_time:
-                self.img_right_depth_deque.popleft()
-            img_right_depth = self.bridge.imgmsg_to_cv2(self.img_right_depth_deque.popleft(), 'passthrough')
-
         img_front_depth = None
         if self.args.use_depth_image:
-            while self.img_front_depth_deque[0].header.stamp.to_sec() < frame_time:
-                self.img_front_depth_deque.popleft()
-            img_front_depth = self.bridge.imgmsg_to_cv2(self.img_front_depth_deque.popleft(), 'passthrough')
+            msg_left_d = _pop_synced(self.img_left_depth_deque)
+            msg_right_d = _pop_synced(self.img_right_depth_deque)
+            msg_front_d = _pop_synced(self.img_front_depth_deque)
+            if msg_left_d is None or msg_right_d is None or msg_front_d is None:
+                return False
+            img_left_depth = self.bridge.imgmsg_to_cv2(msg_left_d, 'passthrough')
+            img_right_depth = self.bridge.imgmsg_to_cv2(msg_right_d, 'passthrough')
+            img_front_depth = self.bridge.imgmsg_to_cv2(msg_front_d, 'passthrough')
 
         robot_base = None
         if self.args.use_robot_base:
-            while self.robot_base_deque[0].header.stamp.to_sec() < frame_time:
-                self.robot_base_deque.popleft()
-            robot_base = self.robot_base_deque.popleft()
+            msg_base = _pop_synced(self.robot_base_deque)
+            if msg_base is None:
+                return False
+            robot_base = msg_base
 
         return (img_front, img_left, img_right, img_front_depth, img_left_depth, img_right_depth,
                 puppet_arm_left, puppet_arm_right, robot_base)
-
     def img_left_callback(self, msg):
         if len(self.img_left_deque) >= 2000:
             self.img_left_deque.popleft()
@@ -735,16 +967,27 @@ def get_arguments():
     parser.add_argument('--use_robot_base', action='store', type=bool, help='use_robot_base',
                         default=False, required=False)
     parser.add_argument('--publish_rate', action='store', type=int, help='publish_rate',
-                        default=40, required=False)
+                        default=30, required=False)
     parser.add_argument('--pos_lookahead_step', action='store', type=int, help='pos_lookahead_step',
                         default=0, required=False)
     parser.add_argument('--chunk_size', action='store', type=int, help='chunk_size',
                         default=32, required=False)
-    parser.add_argument('--arm_steps_length', action='store', type=float, help='arm_steps_length',
-                        default=[0.01, 0.01, 0.01, 0.01, 0.01, 0.01, 0.2], required=False)
+    parser.add_argument(
+        '--arm_steps_length',
+        type=float,
+        nargs='+',
+        help='arm_steps_length (7 floats for one arm; will be duplicated for two arms)',
+        default=[0.03, 0.03, 0.03, 0.03, 0.03, 0.03, 0.2],
+        required=False,
+    )
 
-    parser.add_argument('--use_actions_interpolation', action='store', type=bool, help='use_actions_interpolation',
-                        default=False, required=False)
+    parser.add_argument(
+        '--use_actions_interpolation',
+        action='store_true',
+        help='enable per-joint step-limit smoothing (Choice A)',
+        default=True,
+        required=False,
+    )
     parser.add_argument('--use_depth_image', action='store', type=bool, help='use_depth_image',
                         default=False, required=False)
 
@@ -753,6 +996,14 @@ def get_arguments():
     parser.add_argument('--action_horizon', action='store', type=int, help='action_horizon', default=8, required=False)
     parser.add_argument('--num_inference_timesteps', action='store', type=int, help='num_inference_timesteps', default=10, required=False)
     parser.add_argument('--ema_power', action='store', type=int, help='ema_power', default=0.75, required=False)
+    parser.add_argument(
+        '--frame_mode',
+        type=str,
+        default='latest',
+        choices=['latest', 'sync'],
+        help="get_frame mode: 'latest' returns newest frame (may be slightly misaligned); 'sync' returns time-aligned packet",
+        required=False,
+    )
     args = parser.parse_args()
     return args
 

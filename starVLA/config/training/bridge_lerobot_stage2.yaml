@@ -38,7 +38,7 @@ datasets:
         exclude_task_indices: [4,11,338,1176,3656,3922,4446,4865,6552,9814,11386,11704,12032,12708,13667,15039,16104,16392,16914,17286,18937]   # e.g., [4]
     bridge_reasoning:
       enable: true
-      stage: 1          # Stage 2: subtask latent, reasoning/bbox still explicit
+      stage: 4          # Stage 2: subtask latent, reasoning/bbox still explicit
       include_bbox: true
       include_action_tokens: true
       thinking_token: "<|thinking|>"
@@ -51,7 +51,7 @@ datasets:
         BBOX: 1
       vlm_loss_weight: 1
     ecot:
-      scheduled_stage: 2   # for config validation logging
+      scheduled_stage: 4   # for config validation logging
 
 framework:
   name: "QwenGR00T"

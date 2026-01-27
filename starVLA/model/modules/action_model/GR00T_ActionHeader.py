@@ -605,6 +605,7 @@ class FlowmatchingActionHead(nn.Module):
             modulation=(film_scale, film_shift) if film_scale is not None and film_shift is not None else None,
             film_first_k=self.film_first_k,
             return_all_hidden_states=False,  # NOTE (YL): not using flare now
+            reasoning_mask=reasoning_mask,
         )
         pred = self.action_decoder(model_output)
         pred_actions = pred[:, -actions.shape[1] :]
@@ -672,6 +673,7 @@ class FlowmatchingActionHead(nn.Module):
                 timestep=timesteps_tensor,
                 modulation=(film_scale, film_shift) if film_scale is not None and film_shift is not None else None,
                 film_first_k=self.film_first_k,
+                reasoning_mask=reasoning_mask,
             )
             pred = self.action_decoder(model_output)
 

@@ -31,6 +31,7 @@ IGNORE_INDEX = -100
 from starVLA.model.framework.base_framework import baseframework
 from starVLA.model.modules.vlm import get_vlm_model
 from starVLA.model.modules.action_model.GR00T_ActionHeader import get_action_model, FlowmatchingActionHead
+from starVLA.model.modules.action_model.flow_matching_head import cross_attention_dit as dit_debug
 from starVLA.training.trainer_utils.trainer_tools import resize_images
 from starVLA.model.tools import FRAMEWORK_REGISTRY
 
@@ -440,8 +441,11 @@ class Qwen_GR00T(baseframework):
         max_samples = int(cfg.get("max_samples", 4) or 4)
         max_latents = int(cfg.get("max_latents", 3) or 3)
         max_img_next = int(cfg.get("max_img_next", 16) or 16)
-        dump_embeddings = bool(cfg.get("dump_embeddings", False))
-        dump_img_next_embeddings = bool(cfg.get("dump_img_next_embeddings", False))
+        # Minimal-intrusion UX: if latent_analysis is enabled, default to dumping embeddings
+        # (so users only need `--trainer.latent_analysis.enable=true` to get .pt files).
+        dump_embeddings = bool(cfg.get("dump_embeddings", True))
+        # Minimal-intrusion UX: default to dumping img_next embeddings as well.
+        dump_img_next_embeddings = bool(cfg.get("dump_img_next_embeddings", True))
         embeddings_dtype = str(cfg.get("embeddings_dtype", "float16") or "float16").lower()
         embeddings_subdir = str(cfg.get("embeddings_subdir", "embeddings") or "embeddings")
         # Dedupe controls (reduce repeated instruction logging).
@@ -486,6 +490,8 @@ class Qwen_GR00T(baseframework):
         # Optional: dump embeddings for PCA/UMAP later (store only the needed token vectors).
         think_vec_list: List[torch.Tensor] = []
         think_mask_list: List[torch.Tensor] = []
+        pre5_vec_list: List[torch.Tensor] = []
+        pre5_mask_list: List[torch.Tensor] = []
         img_vec_list: List[torch.Tensor] = []
         img_mask_list: List[torch.Tensor] = []
         input_ids_list: List[torch.Tensor] = []
@@ -549,13 +555,16 @@ class Qwen_GR00T(baseframework):
 
             # thinking tokens
             think_positions = []
+            think_anchor_pos = None
             if thinking_token_id is not None:
                 pos = torch.nonzero(input_ids[b] == int(thinking_token_id), as_tuple=False).squeeze(-1)
                 if pos.numel() > 0:
+                    think_anchor_pos = int(pos[0].item())
                     think_positions = pos[:max_latents].detach().cpu().tolist()
             row["thinking_token_id"] = int(thinking_token_id) if thinking_token_id is not None else None
             row["thinking_positions"] = think_positions
             row["thinking_count"] = int((input_ids[b] == int(thinking_token_id)).sum().item()) if thinking_token_id is not None else 0
+            row["thinking_anchor_pos"] = think_anchor_pos
 
             if think_positions:
                 vecs = last_hidden[b, torch.tensor(think_positions, device=last_hidden.device), :].detach().float()
@@ -588,6 +597,29 @@ class Qwen_GR00T(baseframework):
                         mask_pad[:token_count] = True
                     think_vec_list.append(_cast_dtype(vec_pad).cpu())
                     think_mask_list.append(mask_pad.cpu())
+
+                    # Pre-thinking tokens: directly take the 5 tokens immediately before the first thinking token.
+                    # Minimal intrusion: use fixed positions [p0-5, ..., p0-1] as requested.
+                    # (We still guard in case p0 is too small to avoid crashes.)
+                    p0 = think_anchor_pos
+                    pre5_H = int(last_hidden.shape[-1])
+                    pre5_vec_pad = torch.zeros((5, pre5_H), dtype=torch.float32, device=vecs.device)
+                    pre5_mask_pad = torch.zeros((5,), dtype=torch.bool, device=vecs.device)
+                    pre5_positions: List[int] = []
+                    if p0 is not None:
+                        raw_positions = [p0 - 8, p0 - 7, p0 - 6, p0 - 5, p0 - 4]
+                        # keep only in-range positions; fill remaining with zeros (mask=False)
+                        valid_positions = [int(p) for p in raw_positions if int(p) >= 0 and int(p) < int(input_ids.shape[1])]
+                        pre5_positions = valid_positions
+                        if valid_positions:
+                            pre_vecs = last_hidden[
+                                b, torch.tensor(valid_positions, device=last_hidden.device), :
+                            ].detach().float()
+                            pre5_vec_pad[: pre_vecs.shape[0], :] = pre_vecs
+                            pre5_mask_pad[: pre_vecs.shape[0]] = True
+                    row["pre5_positions"] = pre5_positions
+                    pre5_vec_list.append(_cast_dtype(pre5_vec_pad).cpu())
+                    pre5_mask_list.append(pre5_mask_pad.cpu())
 
             # img_next tokens (optional, for alignment sanity)
             img_positions = []
@@ -667,6 +699,8 @@ class Qwen_GR00T(baseframework):
                 "rows": rows,  # small meta, includes instruction_sha1 and positions
                 "thinking_vecs": torch.stack(think_vec_list, dim=0),   # [N, K, H]
                 "thinking_mask": torch.stack(think_mask_list, dim=0),  # [N, K]
+                "pre5_vecs": torch.stack(pre5_vec_list, dim=0) if pre5_vec_list else None,   # [N, 5, H]
+                "pre5_mask": torch.stack(pre5_mask_list, dim=0) if pre5_mask_list else None,  # [N, 5]
             }
             if dump_img_next_embeddings and img_vec_list and img_mask_list:
                 payload["img_next_vecs"] = torch.stack(img_vec_list, dim=0)   # [N, M, H]
@@ -874,13 +908,13 @@ class Qwen_GR00T(baseframework):
         if cot_mode == "explicit":
             use_iterative_forward = False
         elif cot_mode == "implicit":
-            use_iterative_forward = use_iterative_forward
+            use_iterative_forward = True
         else:
             use_iterative_forward = False
     
         # Step 1: QWenVL input format
         qwen_inputs = self.qwen_vl_interface.build_qwenvl_inputs(images=batch_images, instructions=instructions)
-        reasoning_mask = self._extract_reasoning_mask(qwen_inputs) if cot_mode == "implicit" else None
+        reasoning_mask = self._extract_reasoning_mask(qwen_inputs) 
         img_next_token_id = getattr(self.qwen_vl_interface, "img_next_token_id", None)
         img_next_mask = (qwen_inputs["input_ids"] == img_next_token_id) if img_next_token_id is not None else None
         
@@ -956,12 +990,24 @@ class Qwen_GR00T(baseframework):
                 img_next_mask=img_next_mask,
             )  # (B, chunk_len, action_dim)
 
+        if getattr(dit_debug, "DEBUG_THINKING_ATTN", False):
+            try:
+                cache = self.action_model.model.get_and_clear_thinking_attn_cache()
+                if cache:
+                    out_dir = "/share/project/lvjing/starVLA/results/ANALY"
+                    os.makedirs(out_dir, exist_ok=True)
+                    out_path = os.path.join(out_dir, "thinking_attn_cache.pt")
+                    torch.save(cache, out_path)
+            except Exception as exc:
+                logger.warning(f"[thinking_attn] failed to save cache: {exc}")
+
         normalized_actions = pred_actions.detach().cpu().numpy()
         return {"normalized_actions": normalized_actions, "thinking_gen_time": thinking_gen_time}
 
     def _extract_reasoning_mask(self, qwen_inputs) -> Optional[torch.Tensor]:
         if not (self.use_reasoning_summary or self.use_reasoning_film):
-            return None
+            if not getattr(dit_debug, "DEBUG_THINKING_ATTN", False):
+                return None
         thinking_token_id = getattr(self.qwen_vl_interface, "thinking_token_id", None)
         if thinking_token_id is None:
             return None

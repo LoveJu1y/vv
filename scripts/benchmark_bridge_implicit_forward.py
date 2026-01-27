@@ -20,6 +20,7 @@ from omegaconf import OmegaConf
 
 from starVLA.dataloader.lerobot_datasets import get_vla_dataset
 from starVLA.model.framework import build_framework
+from starVLA.model.modules.action_model.flow_matching_head import cross_attention_dit as dit_debug
 
 
 def _as_percentiles(values_ms: list[float]) -> dict[str, float]:
@@ -107,7 +108,7 @@ def main() -> None:
     dataset = get_vla_dataset(cfg.datasets.vla_data, mode="train", delete_pause_frame=cfg.datasets.vla_data.delete_pause_frame)
     sample = dataset[0]
     examples = [sample]
-
+    print(examples[0]["lang"])
     # Precompute Qwen inputs once (not timed): tokenization + image preprocessing are excluded.
     with torch.inference_mode():
         qwen_inputs = model.qwen_vl_interface.build_qwenvl_inputs(
@@ -152,6 +153,17 @@ def main() -> None:
             )
         torch.cuda.synchronize()
         t2 = time.perf_counter()
+
+        if getattr(dit_debug, "DEBUG_THINKING_ATTN", False):
+            try:
+                cache = model.action_model.model.get_and_clear_thinking_attn_cache()
+                if cache:
+                    out_dir = "/share/project/lvjing/starVLA/results/ANALY"
+                    out_dir.mkdir(parents=True, exist_ok=True)
+                    out_path = out_dir / "thinking_attn_cache.pt"
+                    torch.save(cache, out_path)
+            except Exception as exc:
+                print(f"[thinking_attn] failed to save cache: {exc}")
 
         vlm_ms = (t1 - t0) * 1000.0
         act_ms = (t2 - t1) * 1000.0

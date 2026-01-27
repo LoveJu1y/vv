@@ -1077,8 +1077,18 @@ class LeRobotSingleDataset(Dataset):
 
         language = data[self.modality_keys["language"][0]][0]
         action = []
+        # action_binary_thresholds = getattr(self, "action_binary_thresholds", {}) or {}
         for action_key in self.modality_keys["action"]:
-            action.append(data[action_key])
+            arr = data[action_key]
+            # Optional binarization for scalar gripper-like channels:
+            # - codebase-wide binary semantics are: (x > threshold) -> 1 else 0
+            # - threshold is provided by the DataConfig via `action_binary_thresholds`.
+            # thr = action_binary_thresholds.get(action_key)
+            # if thr is not None:
+            #     arr_np = np.asarray(arr)
+            #     if arr_np.ndim == 2 and arr_np.shape[1] == 1:
+            #         arr = (arr_np > float(thr)).astype(np.float32)
+            action.append(arr)
         action = np.concatenate(action, axis=1)
 
         sample = dict(

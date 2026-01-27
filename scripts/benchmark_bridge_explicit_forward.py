@@ -67,7 +67,7 @@ def main() -> None:
     parser.add_argument(
         "--ckpt",
         type=str,
-        default="/share/project/lvjing/starVLA/results/BridgeFinal_Action/bridge_explicit_cot_stage1_final/checkpoints/steps_40000_pytorch_model.pt",
+        default="/share/project/lvjing/starVLA/results/BridgeFinal_Action/bridge_explicit_cot_stage1/checkpoints/steps_20000_pytorch_model.pt",
     )
     parser.add_argument("--warmup", type=int, default=10)
     parser.add_argument("--steps", type=int, default=20)
@@ -79,7 +79,7 @@ def main() -> None:
         default="bf16",
         help="Autocast dtype for VLM compute in the benchmark region.",
     )
-    parser.add_argument("--max_thinking_len", type=int, default=256)
+    parser.add_argument("--max_thinking_len", type=int, default=25)
     parser.add_argument("--temperature", type=float, default=0.1)
     parser.add_argument("--top_p", type=float, default=0.9)
     parser.add_argument("--print_thinking", action="store_true")

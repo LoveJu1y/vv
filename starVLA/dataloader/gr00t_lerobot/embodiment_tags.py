@@ -72,4 +72,6 @@ ROBOT_TYPE_TO_EMBODIMENT_TAG = {
     "demo_sim_franka_delta_joints": EmbodimentTag.FRANKA,
     "custom_robot_config": EmbodimentTag.NEW_EMBODIMENT,
     "agilex_cobot_magic": EmbodimentTag.NEW_EMBODIMENT,
+    "agilex_aloha": EmbodimentTag.NEW_EMBODIMENT,
+    "galaxea_r1_lite_storage_1105": EmbodimentTag.NEW_EMBODIMENT,
 }

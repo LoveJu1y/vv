@@ -131,12 +131,8 @@ class OxeDroidDataConfig:
                 state_concat_order=self.state_keys,
                 action_concat_order=self.action_keys,
             ),
-            GR00TTransform(
-                state_horizon=len(self.observation_indices),
-                action_horizon=len(self.action_indices),
-                max_state_dim=64,
-                max_action_dim=32,
-            ),
+            # NOTE: GR00TTransform is not used in this codebase (kept in older planning docs);
+            # leaving it here breaks static checks since it's not imported/defined.
         ]
 
         return ComposedModalityTransform(transforms=transforms)
@@ -596,7 +592,7 @@ class AgilexCobotMagicDataConfig:
     video_keys = [
         "video.ego_view",
         # "video.left_view",
-        "video.right_view",
+        # "video.right_view",
     ]
     state_keys = [
         "state.left_arm",
@@ -613,7 +609,7 @@ class AgilexCobotMagicDataConfig:
 
     language_keys = ["annotation.human.action.task_description"]
     observation_indices = [0]
-    action_indices = list(range(50))  # current + next 49
+    action_indices = list(range(25))  # current + next 24
 
     def modality_config(self):
         video_modality = ModalityConfig(
@@ -662,14 +658,192 @@ class AgilexCobotMagicDataConfig:
                     "action.right_hand": "binary",
                 },
                 binary_thresholds={
-                    "action.left_hand": 0.05,
-                    "action.right_hand": 0.05,
+                    "action.left_hand": 0.5,
+                    "action.right_hand": 0.5,
                 },
             ),
         ]
 
         return ComposedModalityTransform(transforms=transforms)
 
+###########################################################################################
+
+
+class AgilexAlohaDataConfig:
+    """
+    Agilex (Aloha split) :: Storage Fruits (task_id=1114)
+
+    Notes:
+    - Use ONLY one camera view: ego_view.
+    - Modality ordering follows the dataset `meta/modality.json`:
+      right_* first, then left_*.
+    """
+
+    video_keys = [
+        "video.ego_view",
+        # "video.left_view",
+        # "video.right_view",
+    ]
+
+    # Keep state keys for completeness (may be unused downstream).
+    state_keys = [
+        "state.right_arm",
+        "state.right_hand",
+        "state.left_arm",
+        "state.left_hand",
+    ]
+
+    action_keys = [
+        "action.right_arm",
+        "action.right_hand",
+        "action.left_arm",
+        "action.left_hand",
+    ]
+
+    language_keys = ["annotation.human.action.task_description"]
+    observation_indices = [0]
+    action_indices = list(range(25))  # current + next 24
+
+    def modality_config(self):
+        video_modality = ModalityConfig(
+            delta_indices=self.observation_indices,
+            modality_keys=self.video_keys,
+        )
+        state_modality = ModalityConfig(
+            delta_indices=self.observation_indices,
+            modality_keys=self.state_keys,
+        )
+        action_modality = ModalityConfig(
+            delta_indices=self.action_indices,
+            modality_keys=self.action_keys,
+        )
+        language_modality = ModalityConfig(
+            delta_indices=self.observation_indices,
+            modality_keys=self.language_keys,
+        )
+        modality_configs = {
+            "video": video_modality,
+            "state": state_modality,
+            "action": action_modality,
+            "language": language_modality,
+        }
+        return modality_configs
+
+    def transform(self):
+        transforms = [
+            # state transforms (kept for completeness; state may be unused downstream)
+            StateActionToTensor(apply_to=self.state_keys),
+            StateActionTransform(
+                apply_to=self.state_keys,
+                normalization_modes={
+                    "state.left_arm": "q99",
+                    "state.right_arm": "q99",
+                },
+            ),
+            # action transforms
+            StateActionToTensor(apply_to=self.action_keys),
+            StateActionTransform(
+                apply_to=self.action_keys,
+                normalization_modes={
+                    "action.right_arm": "q99",
+                    "action.right_hand": "binary",
+                    "action.left_arm": "q99",
+                    "action.left_hand": "binary",
+                },
+                # Keep default threshold aligned with current Agilex config unless overridden in training.
+                binary_thresholds={
+                    "action.right_hand": 0.5,
+                    "action.left_hand": 0.5,
+                },
+            ),
+        ]
+
+        return ComposedModalityTransform(transforms=transforms)
+
+
+
+###########################################################################################
+
+
+class GalaxeaR1LiteStorage1105DataConfig:
+    """
+    Galaxea R1 Lite :: Storage Building Blocks (task_id=1105)
+
+    Minimal-intrusion constraints:
+    - Use ONLY top_left/top_right cameras.
+    - Do NOT use state (action-only).
+    - Action supervision horizon: current + next 49 => 50 steps.
+    - Gripper binarization: (x > 80) -> 1 (open), else 0 (close).
+    """
+
+    video_keys = [
+        "video.image_top_left",
+        "video.image_top_right",
+    ]
+
+    # Explicitly disable state for action-only training.
+    state_keys: list[str] = []
+
+    action_keys = [
+        "action.leader_left_arm",
+        "action.leader_left_gripper",
+        "action.leader_right_arm",
+        "action.leader_right_gripper",
+    ]
+    # Used by LeRobotSingleDataset to binarize selected action sub-keys during sample building.
+    action_binary_thresholds = {
+        "action.leader_left_gripper": 80.0,
+        "action.leader_right_gripper": 80.0,
+    }
+
+    language_keys = ["annotation.human.action.task_description"]
+    observation_indices = [0]
+    action_indices = list(range(50))  # current + next 49
+
+    def modality_config(self):
+        video_modality = ModalityConfig(
+            delta_indices=self.observation_indices,
+            modality_keys=self.video_keys,
+        )
+        state_modality = ModalityConfig(
+            delta_indices=self.observation_indices,
+            modality_keys=self.state_keys,
+        )
+        action_modality = ModalityConfig(
+            delta_indices=self.action_indices,
+            modality_keys=self.action_keys,
+        )
+        language_modality = ModalityConfig(
+            delta_indices=self.observation_indices,
+            modality_keys=self.language_keys,
+        )
+        modality_configs = {
+            "video": video_modality,
+            "state": state_modality,
+            "action": action_modality,
+            "language": language_modality,
+        }
+        return modality_configs
+
+    def transform(self):
+        transforms = [
+            # action transforms
+            StateActionToTensor(apply_to=self.action_keys),
+            StateActionTransform(
+                apply_to=self.action_keys,
+                normalization_modes={
+                    "action.leader_left_arm": "q99",
+                    "action.leader_left_gripper": "binary",
+                    "action.leader_right_arm": "q99",
+                    "action.leader_right_gripper": "binary",
+                },
+                binary_thresholds={
+                    "action.leader_left_gripper": 80.0,
+                    "action.leader_right_gripper": 80.0,
+                },
+            ),
+        ]
+        return ComposedModalityTransform(transforms=transforms)
 
 
 ROBOT_TYPE_CONFIG_MAP = {
@@ -680,4 +854,6 @@ ROBOT_TYPE_CONFIG_MAP = {
     "demo_sim_franka_delta_joints": SingleFrankaRobotiqDeltaJointsDataConfig(),
     "custom_robot_config": SingleFrankaRobotiqDeltaEefDataConfig(),
     "agilex_cobot_magic": AgilexCobotMagicDataConfig(),
+    "agilex_aloha": AgilexAlohaDataConfig(),
+    "galaxea_r1_lite_storage_1105": GalaxeaR1LiteStorage1105DataConfig(),
 }

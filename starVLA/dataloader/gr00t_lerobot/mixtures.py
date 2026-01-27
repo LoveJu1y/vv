@@ -57,16 +57,47 @@ DATASET_NAMED_MIXTURES = {
         ("Agilex_Cobot_Magic_storage_object_two", 1.0, "agilex_cobot_magic"),
     ],
     "agilex_cobot_magic_fruit": [
-        ("Agilex_Cobot_Magic_classify_object_fruit", 1.0, "agilex_cobot_magic"),
+        ("Agilex_Split_Aloha_Storage_Fruits_Storing_fruits_1114", 1.0, "agilex_aloha"),
     ],
     "agilex_cobot_magic_pour": [
-        ("Agilex_Cobot_Magic_pour_water_twice", 1.0, "agilex_cobot_magic"),
+        ("Agilex_Split_Aloha_Pour_Water_Pour Water_1114", 1.0, "agilex_aloha"),
     ],
     "agilex_cobot_magic_stack": [
-        ("Agilex_Cobot_Magic_stack_block_twice", 1.0, "agilex_cobot_magic"),
+        ("Agilex_Split_Aloha_Stack_Blocks_Stack Blocks_1114", 1.0, "agilex_aloha"),
     ],
     "agilex_cobot_magic_storage": [
-        ("Agilex_Cobot_Magic_storage_object_two", 1.0, "agilex_cobot_magic"),
+        ("Agilex_Split_Aloha_Storage_Objects_Storing Objects_1114", 1.0, "agilex_aloha"),
+    ],
+
+    # Agilex Aloha (single-task mixtures)
+    "agilex_aloha_stack_bowl_1110": [
+        ("Agilex_Split_Aloha_Stack_Bowl_Stacked_bowls_1110", 1.0, "agilex_aloha"),
+    ],
+    "agilex_aloha_storage_building_blocks_1109": [
+        ("Agilex_Split_Aloha_Storage_Building_blocks_Storage_Building_Blocks_1109", 1.0, "agilex_aloha"),
+    ],
+    "agilex_aloha_storage_fruits_1114": [
+        ("Agilex_Split_Aloha_Storage_Fruits_Storing_fruits_1114", 1.0, "agilex_aloha"),
+    ],
+    "agilex_aloha_storage_item_1124": [
+        ("Agilex_Split_Aloha_Storage_ltem_Storage_items_1124", 1.0, "agilex_aloha"),
+    ],
+
+    # Agilex Aloha (4-task mixture)
+    "agilex_aloha_real4": [
+        ("Agilex_Split_Aloha_Stack_Bowl_Stacked_bowls_1110", 1.0, "agilex_aloha"),
+        ("Agilex_Split_Aloha_Storage_Building_blocks_Storage_Building_Blocks_1109", 1.0, "agilex_aloha"),
+        ("Agilex_Split_Aloha_Storage_Fruits_Storing_fruits_1114", 1.0, "agilex_aloha"),
+        ("Agilex_Split_Aloha_Storage_ltem_Storage_items_1124", 1.0, "agilex_aloha"),
+    ],
+
+    # Galaxea R1 Lite (single dataset, task_id=1105)
+    "galaxea_r1_lite_storage_1105_single": [
+        (
+            "Galaxea_R1_Lite_Storage_Building blocks_Storage Building Blocks_1105",
+            1.0,
+            "galaxea_r1_lite_storage_1105",
+        ),
     ],
 
     "custom_dataset": [

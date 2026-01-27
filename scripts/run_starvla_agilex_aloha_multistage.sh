@@ -21,10 +21,10 @@ export TOKENIZERS_PARALLELISM="${TOKENIZERS_PARALLELISM:-false}"
 # ----------------------------------------------------------------------------
 # Base configuration
 # ----------------------------------------------------------------------------
-CONFIG_PATH="${CONFIG_PATH:-/share/project/lvjing/starVLA/starVLA/config/training/agilex_cobot_magic_action_only_50step.yaml}"
-RUN_ROOT_DIR="${RUN_ROOT_DIR:-results/AgilexCobotMagic}"
-RUN_ID_PREFIX="${RUN_ID_PREFIX:-agilex_cobot_magic_multistage}"
-WANDB_PROJECT="${WANDB_PROJECT:-agilex_cobot_magic_ecot}"
+CONFIG_PATH="${CONFIG_PATH:-/share/project/lvjing/starVLA/starVLA/config/training/agilex_aloha_action_only_50step.yaml}"
+RUN_ROOT_DIR="${RUN_ROOT_DIR:-results/AgilexAloha_final}"
+RUN_ID_PREFIX="${RUN_ID_PREFIX:-agilex_aloha_final_multistage}"
+WANDB_PROJECT="${WANDB_PROJECT:-agilex_aloha_final}"
 WANDB_ENTITY="${WANDB_ENTITY:-lvj2114-beijing-academy-of-artificial-intelligence}"
 NUM_GPUS="${NUM_GPUS:-8}"
 MASTER_PORT="${MASTER_PORT:-29523}"
@@ -45,7 +45,7 @@ RELOAD_MODULES="${RELOAD_MODULES:-}"
 GLOBAL_STEPS_CACHE_PATH="${STEPS_CACHE_PATH:-}"
 
 # Local steps cache dir (directory path => one cache file per dataset/config_key)
-STEPS_CACHE_DIR="${STEPS_CACHE_DIR:-${RUN_ROOT_DIR}/steps_cache/agilex_cobot_magic_real4}"
+STEPS_CACHE_DIR="${STEPS_CACHE_DIR:-${RUN_ROOT_DIR}/steps_cache/agilex_aloha_real4}"
 
 # Stage control
 STAGES=(1 2 3 4)

@@ -38,7 +38,7 @@ def make_LeRobotSingleDataset(
         embodiment_tag = EmbodimentTag.NEW_EMBODIMENT
     else:
         embodiment_tag = ROBOT_TYPE_TO_EMBODIMENT_TAG[robot_type]
-    return LeRobotSingleDataset(
+    ds = LeRobotSingleDataset(
         dataset_path=dataset_path,
         modality_configs=modality_config,
         transforms=transforms,
@@ -49,6 +49,11 @@ def make_LeRobotSingleDataset(
         bridge_filter_cfg=bridge_filter_cfg,
         bridge_reasoning_cfg=bridge_reasoning_cfg,
     )
+    # Minimal-intrusion hook: allow DataConfig to request binarization of specific action sub-keys
+    # during sample building (e.g. gripper open/close).
+    ds.action_binary_thresholds = getattr(data_config, "action_binary_thresholds", {}) or {}
+    ds.robot_type = robot_type
+    return ds
 
 def get_vla_dataset(
     data_cfg: dict,

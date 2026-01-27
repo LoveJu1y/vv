@@ -801,7 +801,7 @@ class _QWen3_VL_Interface(nn.Module):
             do_sample=True,
             temperature=temperature,
             top_p=top_p,
-            eos_token_id=eos_id,
+            # eos_token_id=eos_id,
             pad_token_id=self.processor.tokenizer.pad_token_id,
             output_hidden_states=False,
             return_dict_in_generate=True,

@@ -1,9 +1,9 @@
 #!/usr/bin/env bash
 # ============================================================================
-# Agilex Cobot Magic (LeRobot) :: ECOT Training Launcher
-#  - Uses starVLA/config/training/agilex_cobot_magic_action_only_50step.yaml as base config
-#  - Mirrors scripts/run_starvla_libero.sh (same knobs / overrides layout)
-#  - Uses a local steps-cache directory (required for dataset mixtures)
+# Galaxea R1 Lite (LeRobot) :: ECOT Training Launcher
+#  - Uses starVLA/config/training/galaxea_r1_lite_storage_1105_action_only_50step.yaml as base config
+#  - Mirrors scripts/run_starvla_agilex_cobot_magic.sh (same knobs / overrides layout)
+#  - Uses a local steps-cache directory (required for dataset mixtures / caching)
 # ============================================================================
 set -euo pipefail
 
@@ -22,7 +22,7 @@ export TOKENIZERS_PARALLELISM="${TOKENIZERS_PARALLELISM:-false}"
 # ----------------------------------------------------------------------------
 NUM_GPUS="${NUM_GPUS:-8}"
 
-MAX_TRAIN_STEPS="${MAX_TRAIN_STEPS:-20000}"
+MAX_TRAIN_STEPS="${MAX_TRAIN_STEPS:-10000}"
 PER_DEVICE_BATCH="${PER_DEVICE_BATCH:-16}"
 LR_VLM="${LR_VLM:-1.2e-5}"
 LR_ACTION="${LR_ACTION:-1.2e-4}"
@@ -30,18 +30,18 @@ LR_BASE="${LR_BASE:-3.0e-5}"
 ACTION_DIT_TYPE="${ACTION_DIT_TYPE:-DiT-B}"
 DIFFUSION_MODEL_DROPOUT="${DIFFUSION_MODEL_DROPOUT:-0.1}"
 
-RUN_ID="${RUN_ID:-agilex_cobot_magic_ecot2}"
+RUN_ID="${RUN_ID:-galaxea_r1_lite_storage_1105}"
 TRAINING_STAGE="${TRAINING_STAGE:-full}"     # full / reasoning_only / action_only
 COT_MODE="${COT_MODE:-implicit}"             # none / vlm_seen_no_out / explicit / implicit
 
 # 默认随 COT_MODE 重写；也可手动指定
 SCHEDULED_STAGE="${SCHEDULED_STAGE:-4}"
 
-SAVE_INTERVAL="${SAVE_INTERVAL:-4000}"
+SAVE_INTERVAL="${SAVE_INTERVAL:-3000}"
 EVAL_INTERVAL="${EVAL_INTERVAL:-20000000}"
 LOGGING_FREQUENCY="${LOGGING_FREQUENCY:-10}"
 WARMUP_RATIO="${WARMUP_RATIO:-0.1}"
-MIN_SAVE_STEP="${MIN_SAVE_STEP:-16000}"
+MIN_SAVE_STEP="${MIN_SAVE_STEP:-7000}"
 
 # Reasoning summary (latent summarizer) controls
 USE_REASONING_SUMMARY="${USE_REASONING_SUMMARY:-false}"
@@ -61,22 +61,24 @@ IMG_NEXT_USE_TEACHER="${IMG_NEXT_USE_TEACHER:-false}"
 IMG_NEXT_LOSS_WEIGHT="${IMG_NEXT_LOSS_WEIGHT:-0.1}"
 USE_IMG_NEXT_MLP="${USE_IMG_NEXT_MLP:-false}"
 
-# Language/VLM loss weight (set 0 to mimic action-only/no-imgloss runs)
-VLM_LOSS_WEIGHT="${VLM_LOSS_WEIGHT:-0}"
+# Action tokens / Language/VLM loss weight (set 0 to mimic action-only/no-imgloss runs)
+INCLUDE_ACTION_TOKENS="${INCLUDE_ACTION_TOKENS:-false}"
+VLM_LOSS_WEIGHT="${VLM_LOSS_WEIGHT:-1}"
 
-WANDB_PROJECT="${WANDB_PROJECT:-agilex_cobot_magic_ecot}"
+WANDB_PROJECT="${WANDB_PROJECT:-galaxea_r1_lite_ecot}"
 WANDB_ENTITY="${WANDB_ENTITY:-lvj2114-beijing-academy-of-artificial-intelligence}"
 
-CONFIG_PATH="${CONFIG_PATH:-/share/project/lvjing/starVLA/starVLA/config/training/agilex_cobot_magic_action_only_50step.yaml}"
-RUN_ROOT_DIR="${RUN_ROOT_DIR:-results/AgilexCobotMagic_final}"
-MASTER_PORT="${MASTER_PORT:-29523}"
+CONFIG_PATH="${CONFIG_PATH:-/share/project/lvjing/starVLA/starVLA/config/training/galaxea_r1_lite_storage_1105_action_only_50step.yaml}"
+RUN_ROOT_DIR="${RUN_ROOT_DIR:-results/GalaxeaR1Lite_final}"
+MASTER_PORT="${MASTER_PORT:-29524}"
 
 # Optional: load from checkpoint
-PRETRAINED_CKPT="${PRETRAINED_CKPT:-/share/project/lvjing/starVLA/results/AgilexCobotMagic/agilex_cobot_magic_multistage_stage_4/checkpoints/steps_2000_pytorch_model.pt}"
+# NOTE: default empty => do not wait for ckpt.
+PRETRAINED_CKPT="${PRETRAINED_CKPT:-}"
 RELOAD_MODULES="${RELOAD_MODULES:-qwen_vl_interface}"
 
 # Steps cache: directory path recommended for multi-dataset mixtures.
-STEPS_CACHE_PATH="${STEPS_CACHE_PATH:-${RUN_ROOT_DIR}/steps_cache/agilex_cobot_magic_real4}"
+STEPS_CACHE_PATH="${STEPS_CACHE_PATH:-${RUN_ROOT_DIR}/steps_cache/galaxea_r1_lite_storage_1105_single}"
 WRITE_STEPS_CACHE="${WRITE_STEPS_CACHE:-true}"
 
 # ----------------------------------------------------------------------------
@@ -128,7 +130,7 @@ mkdir -p "${OUTPUT_DIR}"
 cp "$0" "${OUTPUT_DIR}/run_command.sh"
 
 # ----------------------------------------------------------------------------
-# 训练配置覆盖项（与 run_starvla_libero.sh 对齐）
+# 训练配置覆盖项（与 run_starvla_agilex_cobot_magic.sh 对齐）
 # ----------------------------------------------------------------------------
 TRAIN_CONFIG_ARGS=(
   --trainer.max_train_steps "${MAX_TRAIN_STEPS}"
@@ -164,12 +166,12 @@ TRAIN_CONFIG_ARGS=(
   --framework.action_model.reasoning_summary_heads "${REASONING_SUMMARY_HEADS}"
   --framework.action_model.reasoning_summary_dropout "${REASONING_SUMMARY_DROPOUT}"
 
-  --framework.img_next.enable "true"
-  --framework.img_next.use_teacher "false"
-  --framework.img_next.loss_weight "0.1"
-  --datasets.vla_data.bridge_reasoning.include_action_tokens "false"
-  --framework.latent_reasoning.vlm_loss_weight "0"
-  --datasets.vla_data.bridge_reasoning.vlm_loss_weight "0"
+  --framework.img_next.enable "${ENABLE_IMG_NEXT}"
+  --framework.img_next.use_teacher "${IMG_NEXT_USE_TEACHER}"
+  --framework.img_next.loss_weight "${IMG_NEXT_LOSS_WEIGHT}"
+  --datasets.vla_data.bridge_reasoning.include_action_tokens "${INCLUDE_ACTION_TOKENS}"
+  --framework.latent_reasoning.vlm_loss_weight "${VLM_LOSS_WEIGHT}"
+  --datasets.vla_data.bridge_reasoning.vlm_loss_weight "${VLM_LOSS_WEIGHT}"
 )
 
 if [[ -n "${PRETRAINED_CKPT}" ]]; then
@@ -187,7 +189,7 @@ BASE_CONFIG_ARGS=(
 )
 
 echo "============================================================================"
-echo " Agilex Cobot Magic ECOT Training"
+echo " Galaxea R1 Lite ECOT Training"
 echo " Config : ${CONFIG_PATH}"
 echo " Run ID : ${RUN_ID}"
 echo " Output : ${OUTPUT_DIR}"
@@ -205,3 +207,4 @@ torchrun \
   "$@"
 
 echo "✅ Training finished. Check ${OUTPUT_DIR} for logs and checkpoints."
+
