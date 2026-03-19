@@ -9,6 +9,10 @@ from pathlib import Path
 import requests
 import time
 
+# # 在 import libero/robosuite 前设置：无 EGL 时用 OSMesa 做离屏渲染，避免 "EGL PLATFORM_DEVICE extension" 报错
+# if not os.environ.get("MUJOCO_GL", "").strip():
+#     os.environ["MUJOCO_GL"] = "osmesa"
+
 import imageio
 import numpy as np
 import tqdm
@@ -45,7 +49,7 @@ class Args:
     # Utils
     #################################################################################################################
     video_out_path: str = "experiments/libero/logs"  # Path to save videos
-    save_videos: bool = True
+    save_videos: bool = False
 
     seed: int = 7  # Random Seed (for reproducibility)
 
@@ -56,12 +60,13 @@ class Args:
 
     job_name: str = "test"
 
+    log_path: str = ""
+
     # NOTE: Step2 only (args plumbing). These flags are not used until later steps.
     enable_latent_reasoning: bool = False
     cot_mode: str = "implicit"
     thinking_token_count: int = -1
     img_next_count: int = -1
-    log_path: str = ""
 
 
 def eval_libero(args: Args) -> None:
@@ -76,9 +81,16 @@ def eval_libero(args: Args) -> None:
     num_tasks_in_suite = task_suite.n_tasks
     logging.info(f"Task suite: {args.task_suite_name}")
 
-    # args.video_out_path = f"{date_base}+{args.job_name}"
     if args.save_videos:
         pathlib.Path(args.video_out_path).mkdir(parents=True, exist_ok=True)
+
+    if args.log_path:
+        pathlib.Path(args.log_path).mkdir(parents=True, exist_ok=True)
+    log_file_path = pathlib.Path(args.log_path) / f"{args.task_suite_name}.log"
+    log_file = open(log_file_path, "w")
+    log_file.write(f"Task suite: {args.task_suite_name}\n")
+    # args.video_out_path = f"{date_base}+{args.job_name}"
+    # pathlib.Path(args.video_out_path).mkdir(parents=True, exist_ok=True)
 
     if args.task_suite_name == "libero_spatial":
         max_steps = 220  # longest training demo has 193 steps
@@ -105,7 +117,6 @@ def eval_libero(args: Args) -> None:
         img_next_count=args.img_next_count,
     )
 
-
     # Start evaluation
     total_episodes, total_successes = 0, 0
     for task_id in tqdm.tqdm(range(num_tasks_in_suite)):
@@ -122,6 +133,7 @@ def eval_libero(args: Args) -> None:
         task_episodes, task_successes = 0, 0
         for episode_idx in tqdm.tqdm(range(args.num_trials_per_task)):
             logging.info(f"\nTask: {task_description}")
+            log_file.write(f"\nTask: {task_description}\n")
 
             # Reset environment
             model.reset(task_description=task_description)  # Reset the client connection
@@ -132,7 +144,7 @@ def eval_libero(args: Args) -> None:
 
             # Setup
             t = 0
-            replay_images = []
+            replay_images = [] if args.save_videos else None
             full_actions = []
 
             logging.info(f"Starting episode {task_episodes + 1}...")
@@ -156,7 +168,8 @@ def eval_libero(args: Args) -> None:
                 )
 
                 # Save preprocessed image for replay video
-                replay_images.append(img)
+                if replay_images is not None:
+                    replay_images.append(img)
 
                 state = np.concatenate(
                     (
@@ -184,7 +197,6 @@ def eval_libero(args: Args) -> None:
                     "step": step,
                 }
 
-                
                 start_time = time.time()
                 
                 response = model.step(**obs_input) 
@@ -226,8 +238,8 @@ def eval_libero(args: Args) -> None:
             task_episodes += 1
             total_episodes += 1
 
-            # Save a replay video of the episode
-            if args.save_videos:
+            # Save a replay video of the episode (optional)
+            if args.save_videos and replay_images is not None:
                 suffix = "success" if done else "failure"
                 task_segment = task_description.replace(" ", "_")
                 imageio.mimwrite(
@@ -247,6 +259,12 @@ def eval_libero(args: Args) -> None:
             logging.info(
                 f"# successes: {total_successes} ({total_successes / total_episodes * 100:.1f}%)"
             )
+            log_file.write(f"Success: {done}\n")
+            log_file.write(f"# episodes completed so far: {total_episodes}\n")
+            log_file.write(
+                f"# successes: {total_successes} ({total_successes / total_episodes * 100:.1f}%)\n"
+            )
+            log_file.flush()
 
         # Log final results
         logging.info(
@@ -255,6 +273,13 @@ def eval_libero(args: Args) -> None:
         logging.info(
             f"Current total success rate: {float(total_successes) / float(total_episodes)}"
         )
+        log_file.write(
+            f"Current task success rate: {float(task_successes) / float(task_episodes)}\n"
+        )
+        log_file.write(
+            f"Current total success rate: {float(total_successes) / float(total_episodes)}\n"
+        )
+        log_file.flush()
 
     logging.info(
         f"Total success rate: {float(total_successes) / float(total_episodes)}"
@@ -276,9 +301,7 @@ def _get_libero_env(task, resolution, seed):
         "camera_widths": resolution,
     }
     env = OffScreenRenderEnv(**env_args)
-    env.seed(
-        seed
-    )  # IMPORTANT: seed seems to affect object positions even when using fixed initial state
+    env.seed(seed)  # IMPORTANT: seed seems to affect object positions even when using fixed initial state
     return env, task_description
 
 
@@ -308,6 +331,7 @@ def start_debugpy_once():
     print("🔍 Waiting for VSCode attach on 0.0.0.0:10092 ...")
     debugpy.wait_for_client()
     start_debugpy_once._started = True
+
 
 if __name__ == "__main__":
     if os.getenv("DEBUG", False):

@@ -24,7 +24,7 @@ export TOKENIZERS_PARALLELISM="${TOKENIZERS_PARALLELISM:-false}"
 # ----------------------------------------------------------------------------
 # Base configuration
 # ----------------------------------------------------------------------------
-CONFIG_PATH="${CONFIG_PATH:-/share/project/lvjing/starVLA/starVLA/config/training/bridge_lerobot_stage2.yaml}"
+CONFIG_PATH="${CONFIG_PATH:-../starVLA/config/training/bridge_lerobot_stage2.yaml}"
 RUN_ROOT_DIR="${RUN_ROOT_DIR:-results/BridgeLeRobot_VLM_Final_SDPA5}"
 RUN_ID_PREFIX="${RUN_ID_PREFIX:-bridge_multistage}"
 WANDB_PROJECT="${WANDB_PROJECT:-bridge_multistage_vlm_final_sdpa5}"

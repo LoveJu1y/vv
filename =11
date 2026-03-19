@@ -1,2 +1,2 @@
 Looking in indexes: https://mirrors.aliyun.com/pypi/simple/, https://pypi.doubanio.com/simple/
-Requirement already satisfied: websockets in /share/project/lvjing/miniconda3/envs/starVLA/lib/python3.10/site-packages (15.0.1)
+Requirement already satisfied: websockets in /share/project/lvjing/miniconda3/envs/laravla/lib/python3.10/site-packages (16.0)
