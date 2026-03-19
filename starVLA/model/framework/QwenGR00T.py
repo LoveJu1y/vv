@@ -7,16 +7,12 @@ Qwen-GR00T Framework
 A lightweight implementation that Qwen-VL + Flow-matching head to directly predict continuous actions
 Flow-matching header is copyright from GR00T N1.5,
 """
-import hashlib
-import json
 import os
-from typing import List
-from tqdm import tqdm
 from typing import List, Optional, Tuple
-import torch
-import torch.nn as nn
-import torch.nn.functional as F
+
 import numpy as np
+import torch
+import torch.nn.functional as F
 from PIL import Image
 
 
@@ -29,13 +25,14 @@ logger = initialize_overwatch(__name__)
 IGNORE_INDEX = -100
 
 from starVLA.model.framework.base_framework import baseframework
+from starVLA.model.framework.latent_analysis_mixin import LatentAnalysisMixin
 from starVLA.model.modules.vlm import get_vlm_model
 from starVLA.model.modules.action_model.GR00T_ActionHeader import get_action_model, FlowmatchingActionHead
 from starVLA.training.trainer_utils.trainer_tools import resize_images
 from starVLA.model.tools import FRAMEWORK_REGISTRY
 
 @FRAMEWORK_REGISTRY.register("QwenGR00T")
-class Qwen_GR00T(baseframework):
+class Qwen_GR00T(LatentAnalysisMixin, baseframework):
     """
     Multimodal vision-language-action model.
 
@@ -125,17 +122,12 @@ class Qwen_GR00T(baseframework):
         )
         
         # Check if iterative implicit reasoning is enabled
-        cot_mode = getattr(self.config.framework, "cot_mode", "implicit")
         enable_latent_reasoning = self.config.framework.get("enable_latent_reasoning", False)
         use_iterative_forward = (
-            cot_mode == "implicit"
-            and enable_latent_reasoning
+            enable_latent_reasoning
             and hasattr(self.qwen_vl_interface, "forward_latent")
         )
-        if cot_mode == "explicit":
-            # 显式 CoT：纯文本 forward，全量 hidden 进 cross-attn，不依赖 latent
-            reasoning_mask = None
-        
+
         if use_iterative_forward:
             # Step 2: Iterative forward with KV-Cache for implicit reasoning
             vlm_outputs = self.qwen_vl_interface.forward_latent(
@@ -149,14 +141,6 @@ class Qwen_GR00T(baseframework):
             
             last_hidden = vlm_outputs['hidden_states']  # [B, L, H]
             vlm_loss = vlm_outputs.get('loss')  # May be None if no labels
-            self._maybe_log_latent_analysis(
-                qwen_inputs=qwen_inputs,
-                last_hidden=last_hidden,
-                vlm_outputs=vlm_outputs,
-                instructions=instructions,
-                use_iterative_forward=True,
-                **kwargs,
-            )
         else:
             # Step 2: Normal forward pass (no iterative reasoning)
             with torch.autocast("cuda", dtype=torch.bfloat16):
@@ -168,14 +152,6 @@ class Qwen_GR00T(baseframework):
                 )
                 last_hidden = qwenvl_outputs.hidden_states[-1]   # [B, L, H]
                 vlm_loss = qwenvl_outputs.loss if hasattr(qwenvl_outputs, 'loss') else None
-            self._maybe_log_latent_analysis(
-                qwen_inputs=qwen_inputs,
-                last_hidden=last_hidden,
-                vlm_outputs=None,
-                instructions=instructions,
-                use_iterative_forward=False,
-                **kwargs,
-            )
 
         # Step 3: Compute losses based on training stage
         result = {}
@@ -337,388 +313,6 @@ class Qwen_GR00T(baseframework):
 
         return result
 
-    def _get_latent_analysis_cfg(self) -> dict:
-        """
-        Read config for lightweight latent-token analysis. Defaults to disabled.
-
-        Supported config locations:
-          - cfg.framework.latent_analysis
-          - cfg.trainer.latent_analysis
-        """
-        cached = getattr(self, "_latent_analysis_cfg_cache", None)
-        if isinstance(cached, dict):
-            return cached
-
-        cfg = self.config
-        if cfg is None:
-            return {}
-
-        def _to_dict(obj):
-            if obj is None:
-                return {}
-            if isinstance(obj, dict):
-                return dict(obj)
-            # OmegaConf containers behave like attr objects; try getattr + iteration fallback.
-            try:
-                if hasattr(obj, "items"):
-                    return dict(obj.items())
-            except Exception:
-                pass
-            try:
-                return {k: getattr(obj, k) for k in dir(obj) if not k.startswith("_")}
-            except Exception:
-                return {}
-
-        fw = getattr(cfg, "framework", None)
-        tr = getattr(cfg, "trainer", None)
-        fw_cfg = _to_dict(getattr(fw, "latent_analysis", None)) if fw is not None else {}
-        tr_cfg = _to_dict(getattr(tr, "latent_analysis", None)) if tr is not None else {}
-
-        merged = {}
-        merged.update(fw_cfg)
-        merged.update(tr_cfg)
-        # Cache for future forward calls (config is effectively static during a run).
-        self._latent_analysis_cfg_cache = merged
-        return merged
-
-    def _maybe_log_latent_analysis(
-        self,
-        qwen_inputs: dict,
-        last_hidden: torch.Tensor,
-        vlm_outputs: Optional[dict],
-        instructions: List[str],
-        use_iterative_forward: bool,
-        **kwargs,
-    ) -> None:
-        """
-        Lightweight analysis hook: extract thinking/img_next hidden states and dump summary stats.
-
-        This is intentionally low-overhead and should be gated by config + step interval.
-        """
-        cfg = self._get_latent_analysis_cfg()
-        if not cfg or not bool(cfg.get("enable", False)):
-            return
-
-        # ---- trigger / throttling ----
-        # We support two ways to schedule analysis:
-        #  1) External `global_step` passed in via kwargs (optional)
-        #  2) Internal forward-call counter (default), no trainer changes needed.
-        global_step = kwargs.get("global_step", None)
-
-        # When trainer uses gradient accumulation, it may prefer skipping non-sync microsteps.
-        # If the flag is not passed, we default to logging based on forward-call scheduling.
-        sync_gradients = bool(kwargs.get("analysis_sync_gradients", True))
-
-        interval = int(cfg.get("interval_steps", 0) or 0)
-        if interval <= 0:
-            # Backward-compatible alias: allow interval_forwards
-            interval = int(cfg.get("interval_forwards", 0) or 0)
-        if interval <= 0:
-            return
-
-        # Determine whether we are allowed to write (rank0 only).
-        is_main_process = kwargs.get("is_main_process", None)
-        if is_main_process is None:
-            try:
-                is_main_process = not torch.distributed.is_initialized() or torch.distributed.get_rank() == 0
-            except Exception:
-                is_main_process = True
-        is_main_process = bool(is_main_process)
-        if not is_main_process:
-            return
-
-        # If a real global_step is provided, use it; otherwise, fallback to internal counter.
-        if global_step is None:
-            if not hasattr(self, "_latent_analysis_forward_calls"):
-                self._latent_analysis_forward_calls = 0
-            self._latent_analysis_forward_calls += 1
-            global_step = int(self._latent_analysis_forward_calls)
-
-        if (not sync_gradients) or (int(global_step) % interval != 0):
-            return
-
-        max_samples = int(cfg.get("max_samples", 4) or 4)
-        max_latents = int(cfg.get("max_latents", 3) or 3)
-        max_img_next = int(cfg.get("max_img_next", 16) or 16)
-        # Minimal-intrusion UX: if latent_analysis is enabled, default to dumping embeddings
-        # (so users only need `--trainer.latent_analysis.enable=true` to get .pt files).
-        dump_embeddings = bool(cfg.get("dump_embeddings", True))
-        # Minimal-intrusion UX: default to dumping img_next embeddings as well.
-        dump_img_next_embeddings = bool(cfg.get("dump_img_next_embeddings", True))
-        embeddings_dtype = str(cfg.get("embeddings_dtype", "float16") or "float16").lower()
-        embeddings_subdir = str(cfg.get("embeddings_subdir", "embeddings") or "embeddings")
-        # Dedupe controls (reduce repeated instruction logging).
-        unique_in_batch = bool(cfg.get("unique_in_batch", True))
-        dedupe_across_run = bool(cfg.get("dedupe_across_run", False))
-        max_seen_instructions = int(cfg.get("max_seen_instructions", 50000) or 50000)
-        log_saved_instruction_count = bool(cfg.get("log_saved_instruction_count", False))
-        dump_dir = getattr(self, "_latent_analysis_dump_dir", None)
-        if not dump_dir:
-            dump_dir = str(cfg.get("dump_dir") or "")
-            if not dump_dir:
-                out_dir = getattr(self.config, "output_dir", None)
-                dump_dir = os.path.join(str(out_dir), "latent_analysis") if out_dir else "latent_analysis"
-            try:
-                os.makedirs(dump_dir, exist_ok=True)
-            except Exception as exc:
-                logger.warning(f"[latent_analysis] cannot create dump_dir={dump_dir}: {exc}")
-                return
-            self._latent_analysis_dump_dir = dump_dir
-
-        # --- locate token positions (do not rely on reasoning_mask which is gated by action-head settings) ---
-        input_ids = qwen_inputs.get("input_ids", None)
-        if input_ids is None or not isinstance(input_ids, torch.Tensor) or input_ids.ndim != 2:
-            return
-        attention_mask = qwen_inputs.get("attention_mask", None)
-        if attention_mask is None or not isinstance(attention_mask, torch.Tensor) or attention_mask.ndim != 2:
-            attention_mask = None
-
-        thinking_token_id = getattr(self.qwen_vl_interface, "thinking_token_id", None)
-        img_next_token_id = getattr(self.qwen_vl_interface, "img_next_token_id", None)
-
-        B = int(input_ids.shape[0])
-
-        def _base_instruction(text: str) -> str:
-            t = (text or "").strip()
-            if " @ " in t:
-                t = t.split(" @ ", 1)[0].strip()
-            return t
-
-        # --- per-sample stats ---
-        rows = []
-        # Optional: dump embeddings for PCA/UMAP later (store only the needed token vectors).
-        think_vec_list: List[torch.Tensor] = []
-        think_mask_list: List[torch.Tensor] = []
-        pre5_vec_list: List[torch.Tensor] = []
-        pre5_mask_list: List[torch.Tensor] = []
-        img_vec_list: List[torch.Tensor] = []
-        img_mask_list: List[torch.Tensor] = []
-        input_ids_list: List[torch.Tensor] = []
-        attention_mask_list: List[torch.Tensor] = []
-
-        def _cast_dtype(x: torch.Tensor) -> torch.Tensor:
-            if embeddings_dtype in ("fp16", "float16", "half"):
-                return x.to(dtype=torch.float16)
-            if embeddings_dtype in ("bf16", "bfloat16"):
-                return x.to(dtype=torch.bfloat16)
-            return x.to(dtype=torch.float32)
-
-        # Track seen instructions to reduce duplicates.
-        batch_seen: set[str] = set()
-        if dedupe_across_run:
-            if not hasattr(self, "_latent_analysis_seen_instr"):
-                self._latent_analysis_seen_instr = set()
-            # If we've reached the cap, stop saving further analysis to avoid unbounded growth.
-            if getattr(self, "_latent_analysis_stop_saving", False):
-                return
-            if max_seen_instructions > 0 and len(self._latent_analysis_seen_instr) >= max_seen_instructions:
-                if not getattr(self, "_latent_analysis_dedupe_overflow_warned", False):
-                    logger.warning(
-                        "[latent_analysis] max_seen_instructions=%s reached (seen=%s); stop saving further analysis.",
-                        max_seen_instructions,
-                        len(self._latent_analysis_seen_instr),
-                    )
-                    self._latent_analysis_dedupe_overflow_warned = True
-                self._latent_analysis_stop_saving = True
-                return
-
-        for b in range(B):
-            if len(rows) >= max_samples:
-                break
-            row = {
-                "global_step": int(global_step),
-                "batch_index": int(b),
-                "use_iterative_forward": bool(use_iterative_forward),
-                "cot_mode": str(getattr(self.config.framework, "cot_mode", "implicit")) if self.config is not None else "unknown",
-            }
-
-            instr = instructions[b] if b < len(instructions) else ""
-            base = _base_instruction(instr)
-            row["instruction"] = base[:200]
-            row["instruction_sha1"] = hashlib.sha1(base.encode("utf-8")).hexdigest()  # stable task key
-
-            sha1 = row["instruction_sha1"]
-            if unique_in_batch and sha1 in batch_seen:
-                continue
-            if dedupe_across_run and sha1 in getattr(self, "_latent_analysis_seen_instr", set()):
-                continue
-            batch_seen.add(sha1)
-            if dedupe_across_run:
-                self._latent_analysis_seen_instr.add(sha1)
-
-            if vlm_outputs is not None:
-                try:
-                    row["num_reasoning_passes"] = int(vlm_outputs.get("num_reasoning_passes", 0) or 0)
-                except Exception:
-                    row["num_reasoning_passes"] = None
-
-            # thinking tokens
-            think_positions = []
-            think_anchor_pos = None
-            if thinking_token_id is not None:
-                pos = torch.nonzero(input_ids[b] == int(thinking_token_id), as_tuple=False).squeeze(-1)
-                if pos.numel() > 0:
-                    think_anchor_pos = int(pos[0].item())
-                    think_positions = pos[:max_latents].detach().cpu().tolist()
-            row["thinking_token_id"] = int(thinking_token_id) if thinking_token_id is not None else None
-            row["thinking_positions"] = think_positions
-            row["thinking_count"] = int((input_ids[b] == int(thinking_token_id)).sum().item()) if thinking_token_id is not None else 0
-            row["thinking_anchor_pos"] = think_anchor_pos
-
-            if think_positions:
-                vecs = last_hidden[b, torch.tensor(think_positions, device=last_hidden.device), :].detach().float()
-                norms = torch.linalg.norm(vecs, dim=-1)
-                row["thinking_norm_mean"] = float(norms.mean().item())
-                row["thinking_norm_std"] = float(norms.std(unbiased=False).item()) if norms.numel() > 1 else 0.0
-
-                # pairwise cosine among first up-to-3 tokens
-                v = F.normalize(vecs, dim=-1)
-                cos = (v @ v.T).detach().cpu()
-                # store compact off-diagonal mean + specific pairs if available
-                if cos.numel() > 1:
-                    off = cos[~torch.eye(cos.shape[0], dtype=torch.bool)]
-                    row["thinking_cos_offdiag_mean"] = float(off.mean().item()) if off.numel() else None
-                else:
-                    row["thinking_cos_offdiag_mean"] = None
-                if cos.shape[0] >= 2:
-                    row["thinking_cos_01"] = float(cos[0, 1].item())
-                if cos.shape[0] >= 3:
-                    row["thinking_cos_12"] = float(cos[1, 2].item())
-                    row["thinking_cos_02"] = float(cos[0, 2].item())
-
-                if dump_embeddings:
-                    H = int(last_hidden.shape[-1])
-                    token_count = min(len(think_positions), max_latents)
-                    vec_pad = torch.zeros((max_latents, H), dtype=torch.float32, device=vecs.device)
-                    mask_pad = torch.zeros((max_latents,), dtype=torch.bool, device=vecs.device)
-                    if token_count > 0:
-                        vec_pad[:token_count, :] = vecs[:token_count]
-                        mask_pad[:token_count] = True
-                    think_vec_list.append(_cast_dtype(vec_pad).cpu())
-                    think_mask_list.append(mask_pad.cpu())
-
-                    # Pre-thinking tokens: directly take the 5 tokens immediately before the first thinking token.
-                    # Minimal intrusion: use fixed positions [p0-5, ..., p0-1] as requested.
-                    # (We still guard in case p0 is too small to avoid crashes.)
-                    p0 = think_anchor_pos
-                    pre5_H = int(last_hidden.shape[-1])
-                    pre5_vec_pad = torch.zeros((5, pre5_H), dtype=torch.float32, device=vecs.device)
-                    pre5_mask_pad = torch.zeros((5,), dtype=torch.bool, device=vecs.device)
-                    pre5_positions: List[int] = []
-                    if p0 is not None:
-                        raw_positions = [p0 - 8, p0 - 7, p0 - 6, p0 - 5, p0 - 4]
-                        # keep only in-range positions; fill remaining with zeros (mask=False)
-                        valid_positions = [int(p) for p in raw_positions if int(p) >= 0 and int(p) < int(input_ids.shape[1])]
-                        pre5_positions = valid_positions
-                        if valid_positions:
-                            pre_vecs = last_hidden[
-                                b, torch.tensor(valid_positions, device=last_hidden.device), :
-                            ].detach().float()
-                            pre5_vec_pad[: pre_vecs.shape[0], :] = pre_vecs
-                            pre5_mask_pad[: pre_vecs.shape[0]] = True
-                    row["pre5_positions"] = pre5_positions
-                    pre5_vec_list.append(_cast_dtype(pre5_vec_pad).cpu())
-                    pre5_mask_list.append(pre5_mask_pad.cpu())
-
-            # img_next tokens (optional, for alignment sanity)
-            img_positions = []
-            if img_next_token_id is not None:
-                pos = torch.nonzero(input_ids[b] == int(img_next_token_id), as_tuple=False).squeeze(-1)
-                if pos.numel() > 0:
-                    img_positions = pos[:max_img_next].detach().cpu().tolist()
-            row["img_next_token_id"] = int(img_next_token_id) if img_next_token_id is not None else None
-            row["img_next_count"] = int((input_ids[b] == int(img_next_token_id)).sum().item()) if img_next_token_id is not None else 0
-            row["img_next_positions_head"] = img_positions
-
-            if dump_embeddings:
-                # Keep alignment tensors for offline reproduction.
-                input_ids_list.append(input_ids[b].detach().cpu())
-                if attention_mask is not None:
-                    attention_mask_list.append(attention_mask[b].detach().cpu())
-
-            if dump_embeddings and dump_img_next_embeddings and img_next_token_id is not None:
-                H = int(last_hidden.shape[-1])
-                token_count = min(len(img_positions), max_img_next)
-                vec_pad = torch.zeros((max_img_next, H), dtype=torch.float32, device=last_hidden.device)
-                mask_pad = torch.zeros((max_img_next,), dtype=torch.bool, device=last_hidden.device)
-                if token_count > 0:
-                    vecs = last_hidden[b, torch.tensor(img_positions, device=last_hidden.device), :].detach().float()
-                    vec_pad[:token_count, :] = vecs[:token_count]
-                    mask_pad[:token_count] = True
-                img_vec_list.append(_cast_dtype(vec_pad).cpu())
-                img_mask_list.append(mask_pad.cpu())
-
-            rows.append(row)
-
-        # If all samples were filtered out, do nothing.
-        if not rows:
-            return
-
-        if log_saved_instruction_count:
-            try:
-                total_seen = (
-                    len(getattr(self, "_latent_analysis_seen_instr", set()))
-                    if dedupe_across_run
-                    else None
-                )
-            except Exception:
-                total_seen = None
-            logger.info(
-                "[latent_analysis] saved_rows=%s unique_in_batch=%s dedupe_across_run=%s total_seen=%s step=%s",
-                len(rows),
-                unique_in_batch,
-                dedupe_across_run,
-                total_seen,
-                int(global_step),
-            )
-            print(f"[latent_analysis] saved_rows={len(rows)} unique_in_batch={unique_in_batch} dedupe_across_run={dedupe_across_run} total_seen={total_seen} step={int(global_step)}")
-
-        # Append to jsonl
-        out_path = os.path.join(str(dump_dir), "latent_stats.jsonl")
-        try:
-            with open(out_path, "a", encoding="utf-8") as f:
-                for r in rows:
-                    f.write(json.dumps(r, ensure_ascii=False) + "\n")
-        except Exception as exc:
-                logger.warning(f"[latent_analysis] failed to write stats: {exc}")
-
-        # Optional: dump token embeddings for later PCA/UMAP (one file per trigger).
-        if dump_embeddings and think_vec_list and think_mask_list:
-            emb_dir = os.path.join(str(dump_dir), embeddings_subdir)
-            try:
-                os.makedirs(emb_dir, exist_ok=True)
-            except Exception as exc:
-                logger.warning(f"[latent_analysis] failed to create embeddings dir: {exc}")
-                return
-
-            payload = {
-                "global_step": int(global_step),
-                "use_iterative_forward": bool(use_iterative_forward),
-                "cot_mode": str(getattr(self.config.framework, "cot_mode", "implicit")) if self.config is not None else "unknown",
-                "rows": rows,  # small meta, includes instruction_sha1 and positions
-                "thinking_vecs": torch.stack(think_vec_list, dim=0),   # [N, K, H]
-                "thinking_mask": torch.stack(think_mask_list, dim=0),  # [N, K]
-                "pre5_vecs": torch.stack(pre5_vec_list, dim=0) if pre5_vec_list else None,   # [N, 5, H]
-                "pre5_mask": torch.stack(pre5_mask_list, dim=0) if pre5_mask_list else None,  # [N, 5]
-            }
-            if dump_img_next_embeddings and img_vec_list and img_mask_list:
-                payload["img_next_vecs"] = torch.stack(img_vec_list, dim=0)   # [N, M, H]
-                payload["img_next_mask"] = torch.stack(img_mask_list, dim=0)  # [N, M]
-
-            # Keep input_ids/attention_mask for exact alignment reproduction in offline analysis.
-            try:
-                payload["input_ids"] = torch.stack(input_ids_list, dim=0) if input_ids_list else input_ids[: len(rows)].detach().cpu()
-                if attention_mask is not None and attention_mask_list:
-                    payload["attention_mask"] = torch.stack(attention_mask_list, dim=0)
-            except Exception:
-                pass
-
-            emb_path = os.path.join(emb_dir, f"latent_emb_step_{int(global_step):08d}.pt")
-            try:
-                torch.save(payload, emb_path)
-            except Exception as exc:
-                logger.warning(f"[latent_analysis] failed to write embeddings: {exc}")
-
     def _compute_img_next_loss(
         self,
         last_hidden: torch.Tensor,
@@ -862,94 +456,38 @@ class Qwen_GR00T(baseframework):
     @torch.inference_mode()
     def predict_action(
         self,
-        batch_images: List[List[Image.Image]],  # Batch of PIL Image list as [view1, view2]
+        batch_images: List[List[Image.Image]],
         instructions: List[str],
         state: Optional[np.ndarray] = None,
-        use_iterative_forward: bool = False,  # ECOT: Enable forward_latent for implicit reasoning
-        **kwargs: str,
+        **kwargs,
     ) -> np.ndarray:
         """
-        推理：单次前向直接回归未来动作（无扩散采样）。
+        Inference: predict future actions via latent reasoning + diffusion sampling.
 
         Steps:
           1. Resize images to training resolution (if specified)
-          2. Encode with QwenVL (hidden states retained)
-             - If use_iterative_forward=True: Use forward_latent for implicit reasoning (ECOT)
-             - Otherwise: Use normal forward pass (Baseline)
+          2. Encode with QwenVL
+             - forward_latent for implicit reasoning (iterative KV-Cache)
+             - Fallback to normal forward if forward_latent unavailable
           3. Action model prediction from hidden states
-          4. Return normalized action trajectory
-
-        Args:
-            batch_images: List of samples; each sample is List[PIL.Image] (multi-view).
-            instructions: List[str] natural language task instructions.
-            state: Optional proprioceptive state.
-            use_iterative_forward: If True, use forward_latent for ECOT implicit reasoning.
-                                   This enables multi-pass forward with thinking token embeddings.
-            **kwargs: Reserved.
 
         Returns:
-            dict:
-                normalized_actions (np.ndarray): Shape [B, T, action_dim], predicted normalized actions.
+            dict with normalized_actions (np.ndarray [B, T, action_dim]).
         """
         train_obs_image_size = getattr(self.config.datasets.vla_data, "image_size", None)
         if train_obs_image_size:
             batch_images = resize_images(batch_images, target_size=train_obs_image_size)
     
-        # 推理模式与超参
-        print(f"instructions: {instructions}")
-        cot_mode = kwargs.get("cot_mode", "implicit")
-        emit_thinking_tokens = kwargs.get("emit_thinking_tokens", False)
-        think_max_len = kwargs.get("think_max_len", 64)
-        think_temp = kwargs.get("think_temp", 0.1)
-        think_topp = kwargs.get("think_topp", 0.9)
+        use_iterative_forward = hasattr(self.qwen_vl_interface, 'forward_latent')
 
-        # 显式模式关闭迭代；隐式依赖输入开关
-        if cot_mode == "explicit":
-            use_iterative_forward = False
-        elif cot_mode == "implicit":
-            use_iterative_forward = True
-        else:
-            use_iterative_forward = False
-    
         # Step 1: QWenVL input format
         qwen_inputs = self.qwen_vl_interface.build_qwenvl_inputs(images=batch_images, instructions=instructions)
-        reasoning_mask = self._extract_reasoning_mask(qwen_inputs) 
+        reasoning_mask = self._extract_reasoning_mask(qwen_inputs)
         img_next_token_id = getattr(self.qwen_vl_interface, "img_next_token_id", None)
         img_next_mask = (qwen_inputs["input_ids"] == img_next_token_id) if img_next_token_id is not None else None
-        
-        # Step 2: Choose forward method based on use_iterative_forward flag
-        thinking_gen_time = 0.0
-        if cot_mode == "explicit":
-            # 显式：先生成思维文本，再全量 forward 取 hidden
-            gen_result = self.qwen_vl_interface.generate_thinking_explicit(
-                input_ids=qwen_inputs["input_ids"],
-                attention_mask=qwen_inputs["attention_mask"],
-                pixel_values=qwen_inputs.get("pixel_values"),
-                image_grid_thw=qwen_inputs.get("image_grid_thw"),
-                max_thinking_len=256,
-                temperature=think_temp,
-                top_p=think_topp,
-            )
-            thinking_texts = gen_result.get("thinking_text", [])
-            if thinking_texts:
-                print(f"[explicit thinking] sample0: {thinking_texts[0]}")
-            thinking_gen_time = gen_result["gen_time"]
-            full_ids = gen_result["generated_ids"]
-            full_mask = torch.ones_like(full_ids)
-            with torch.autocast("cuda", dtype=torch.bfloat16):
-                qwenvl_outputs = self.qwen_vl_interface(
-                    input_ids=full_ids,
-                    attention_mask=full_mask,
-                    pixel_values=qwen_inputs.get("pixel_values"),
-                    image_grid_thw=qwen_inputs.get("image_grid_thw"),
-                    output_attentions=False,
-                    output_hidden_states=True,
-                    return_dict=True,
-                )
-            last_hidden = qwenvl_outputs.hidden_states[-1]
-            reasoning_mask = None
 
-        elif use_iterative_forward and hasattr(self.qwen_vl_interface, 'forward_latent'):
+        # Step 2: Forward pass
+        if use_iterative_forward:
             # ECOT mode: Use forward_latent for implicit reasoning with thinking tokens
             # This performs multiple forward passes with KV-Cache and dynamic embedding updates
             with torch.autocast("cuda", dtype=torch.bfloat16):
@@ -975,8 +513,6 @@ class Qwen_GR00T(baseframework):
                     output_hidden_states=True,
                     return_dict=True,
                 )
-                print(qwen_inputs["input_ids"])
-                # last_hidden_state: [B, seq_len, H]
                 last_hidden = qwenvl_outputs.hidden_states[-1]   # [B, L, H]
 
         state = torch.from_numpy(np.array(state)).to(last_hidden.device, dtype=last_hidden.dtype) if state is not None else None
@@ -990,7 +526,7 @@ class Qwen_GR00T(baseframework):
             )  # (B, chunk_len, action_dim)
 
         normalized_actions = pred_actions.detach().cpu().numpy()
-        return {"normalized_actions": normalized_actions, "thinking_gen_time": thinking_gen_time}
+        return {"normalized_actions": normalized_actions, "thinking_gen_time": 0.0}
 
     def _extract_reasoning_mask(self, qwen_inputs) -> Optional[torch.Tensor]:
         if not (self.use_reasoning_summary or self.use_reasoning_film):
