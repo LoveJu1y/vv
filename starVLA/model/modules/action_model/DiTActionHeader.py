@@ -18,7 +18,7 @@ from torch import nn
 
 
 # Create model sizes of ActionModels
-def DiT_S(**kwargs):  # TODO move to config for reproducibility
+def DiT_S(**kwargs):
     """
     Small DiT variant.
 

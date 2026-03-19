@@ -20,8 +20,6 @@ from starVLA.model.modules.action_model.flow_matching_head.action_encoder import
 
 from starVLA.model.modules.action_model.flow_matching_head.cross_attention_dit import DiT, SelfAttentionTransformer
 
-# TODO try to meger DiT Modules with follow_match_head, they are just the same arch, but diff loss, use diffusers package will be simple
-
 class CategorySpecificLinear(nn.Module):
     def __init__(self, num_categories, input_dim, hidden_dim):
         super().__init__()
@@ -225,7 +223,7 @@ class LayerwiseFlowmatchingActionHead(nn.Module):
 
         diffusion_model_cfg = config.diffusion_model_cfg
         diffusion_model_cfg = {**action_model_cfg, **diffusion_model_cfg}
-        self.model = DiT(**diffusion_model_cfg) # TODO better way is copy LLM from VLM
+        self.model = DiT(**diffusion_model_cfg)
         self.action_dim = config.action_dim
         self.action_horizon = config.future_action_window_size + 1
         self.num_inference_timesteps = config.num_inference_timesteps
@@ -411,6 +409,4 @@ def get_action_model(config=None):
 
 
 if __name__ == "__main__":
-    # TODO make each backbone.py can be debug independently
-
     pass

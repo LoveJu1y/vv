@@ -71,9 +71,7 @@ class Qwen_GR00T(LatentAnalysisMixin, baseframework):
         
         # Training stage control: "reasoning_only", "action_only", or "full"
         self.training_stage = config.framework.get("training_stage", "full")
-        self.use_reasoning_summary = getattr(self.config.framework.action_model, "use_reasoning_summary", False)
-        self.use_reasoning_film = getattr(self.config.framework.action_model, "use_reasoning_film", False)
-        
+
         # Apply parameter freezing based on training stage
         if self.training_stage == "reasoning_only":
             print(f"🔒 [Training Stage] reasoning_only mode - Freezing action_model parameters")
@@ -115,12 +113,6 @@ class Qwen_GR00T(LatentAnalysisMixin, baseframework):
             instructions=instructions,
             action_tokens=action_tokens,
         )
-        reasoning_mask = (
-            self._extract_reasoning_mask(qwen_inputs)
-            if self.training_stage != "reasoning_only"
-            else None
-        )
-        
         # Check if iterative implicit reasoning is enabled
         enable_latent_reasoning = self.config.framework.get("enable_latent_reasoning", False)
         use_iterative_forward = (
@@ -231,18 +223,10 @@ class Qwen_GR00T(LatentAnalysisMixin, baseframework):
                     
                     state_repeated = state.repeat(repeated_diffusion_steps, 1, 1)  # [B*repeated_diffusion_steps, 1, state_dim]
 
-                reasoning_mask_repeated = self._repeat_reasoning_mask(reasoning_mask, repeated_diffusion_steps)
-                img_next_mask_repeated = (
-                    img_next_mask_for_action.repeat(repeated_diffusion_steps, 1)
-                    if img_next_mask_for_action is not None
-                    else None
-                )
                 action_loss = self.action_model(
                     last_hidden_repeated,
                     actions_target_repeated,
                     state_repeated,
-                    reasoning_mask=reasoning_mask_repeated,
-                    img_next_mask=img_next_mask_repeated,
                 )
 
                 result["action_loss"] = action_loss
@@ -253,7 +237,6 @@ class Qwen_GR00T(LatentAnalysisMixin, baseframework):
         else:
             # full mode: Train both VLM and action head
             with torch.autocast("cuda", dtype=torch.float32):
-                # 标签对齐：取最后 chunk_len 段
                 actions = torch.tensor(
                     np.array(actions), device=last_hidden.device, dtype=last_hidden.dtype
                 )  # [B, T_full, action_dim]
@@ -271,24 +254,15 @@ class Qwen_GR00T(LatentAnalysisMixin, baseframework):
                         np.array(state), device=last_hidden.device, dtype=last_hidden.dtype
                     )  # [B, state_dim] or [B, 1, state_dim]
                     
-                    # Ensure state is 3D: [B, 1, state_dim]
                     if state.ndim == 2:
-                        state = state.unsqueeze(1)  # [B, state_dim] -> [B, 1, state_dim]
+                        state = state.unsqueeze(1)
                     
-                    state_repeated = state.repeat(repeated_diffusion_steps, 1, 1)  # [B*repeated_diffusion_steps, 1, state_dim]
+                    state_repeated = state.repeat(repeated_diffusion_steps, 1, 1)
 
-                reasoning_mask_repeated = self._repeat_reasoning_mask(reasoning_mask, repeated_diffusion_steps)
-                img_next_mask_repeated = (
-                    img_next_mask_for_action.repeat(repeated_diffusion_steps, 1)
-                    if img_next_mask_for_action is not None
-                    else None
-                )
                 action_loss = self.action_model(
                     last_hidden_repeated,
                     actions_target_repeated,
                     state_repeated,
-                    reasoning_mask=reasoning_mask_repeated,
-                    img_next_mask=img_next_mask_repeated,
                 )
 
             result["action_loss"] = action_loss
@@ -482,9 +456,6 @@ class Qwen_GR00T(LatentAnalysisMixin, baseframework):
 
         # Step 1: QWenVL input format
         qwen_inputs = self.qwen_vl_interface.build_qwenvl_inputs(images=batch_images, instructions=instructions)
-        reasoning_mask = self._extract_reasoning_mask(qwen_inputs)
-        img_next_token_id = getattr(self.qwen_vl_interface, "img_next_token_id", None)
-        img_next_mask = (qwen_inputs["input_ids"] == img_next_token_id) if img_next_token_id is not None else None
 
         # Step 2: Forward pass
         if use_iterative_forward:
@@ -521,34 +492,11 @@ class Qwen_GR00T(LatentAnalysisMixin, baseframework):
             pred_actions = self.action_model.predict_action(
                 last_hidden,
                 state,
-                reasoning_mask=reasoning_mask,
-                img_next_mask=img_next_mask,
             )  # (B, chunk_len, action_dim)
 
         normalized_actions = pred_actions.detach().cpu().numpy()
         return {"normalized_actions": normalized_actions, "thinking_gen_time": 0.0}
 
-    def _extract_reasoning_mask(self, qwen_inputs) -> Optional[torch.Tensor]:
-        if not (self.use_reasoning_summary or self.use_reasoning_film):
-            return None
-        thinking_token_id = getattr(self.qwen_vl_interface, "thinking_token_id", None)
-        if thinking_token_id is None:
-            return None
-        input_ids = qwen_inputs.get("input_ids", None)
-        if input_ids is None:
-            return None
-        mask = (input_ids == thinking_token_id)
-        if not torch.any(mask):
-            return None
-        return mask
-
-    @staticmethod
-    def _repeat_reasoning_mask(mask: Optional[torch.Tensor], repeat_steps: int) -> Optional[torch.Tensor]:
-        if mask is None:
-            return None
-        if repeat_steps <= 1:
-            return mask
-        return mask.repeat(repeat_steps, 1)
 
 
 if __name__ == "__main__":

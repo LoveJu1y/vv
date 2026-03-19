@@ -84,19 +84,7 @@ def get_action_model(config=None):
     return action_model
 
 
-def start_debugpy_once():
-    """start debugpy once"""
-    import debugpy
-    if getattr(start_debugpy_once, "_started", False):
-        return
-    debugpy.listen(("0.0.0.0", 10094))
-    print("🔍 Waiting for VSCode attach on 0.0.0.0:10094 ...")
-    debugpy.wait_for_client()
-    start_debugpy_once._started = True
-
 if __name__ == "__main__":
-
-    start_debugpy_once()
 
     fast_tokenizer_name = "./playground/Pretrained_models/fast"
     fast_tokenizer = Fast_Action_Tokenizer(fast_tokenizer_name=fast_tokenizer_name)
