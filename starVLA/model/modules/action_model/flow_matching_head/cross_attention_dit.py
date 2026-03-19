@@ -27,9 +27,6 @@ from diffusers.models.embeddings import (
 )
 from torch import nn
 
-DEBUG_THINKING_ATTN = False
-
-
 class TimestepEncoder(nn.Module):
     def __init__(self, embedding_dim, compute_dtype=torch.float32):
         super().__init__()
@@ -157,7 +154,6 @@ class BasicTransformerBlock(nn.Module):
         encoder_attention_mask: Optional[torch.Tensor] = None,
         temb: Optional[torch.LongTensor] = None,
         reasoning_mask: Optional[torch.Tensor] = None,
-        thinking_attn_collector: Optional[list] = None,
     ) -> torch.Tensor:
 
         # 0. Self-Attention
@@ -175,53 +171,6 @@ class BasicTransformerBlock(nn.Module):
             attention_mask=attention_mask,
             # encoder_attention_mask=encoder_attention_mask,
         )
-        if (
-            DEBUG_THINKING_ATTN
-            and encoder_hidden_states is not None
-            and reasoning_mask is not None
-            and thinking_attn_collector is not None
-        ):
-            try:
-                if reasoning_mask.shape[:2] == encoder_hidden_states.shape[:2]:
-                    with torch.no_grad():
-                        batch_size = encoder_hidden_states.shape[0]
-                        heads = self.attn1.heads
-                        query = self.attn1.to_q(norm_hidden_states)
-
-                        if self.attn1.norm_cross:
-                            encoder_hidden_states = self.attn1.norm_encoder_hidden_states(
-                                encoder_hidden_states
-                            )
-
-                        key = self.attn1.to_k(encoder_hidden_states)
-
-                        head_dim = key.shape[-1] // heads
-                        query = query.view(batch_size, -1, heads, head_dim).transpose(1, 2)
-                        key = key.view(batch_size, -1, heads, head_dim).transpose(1, 2)
-
-                        if self.attn1.norm_q is not None:
-                            query = self.attn1.norm_q(query)
-                        if self.attn1.norm_k is not None:
-                            key = self.attn1.norm_k(key)
-
-                        query = query.reshape(batch_size * heads, -1, head_dim)
-                        key = key.reshape(batch_size * heads, -1, head_dim)
-                        attn_probs = self.attn1.get_attention_scores(query, key, attention_mask)
-
-                        mask = reasoning_mask.bool()
-                        mask = mask.unsqueeze(1).expand(batch_size, heads, -1)
-                        mask = mask.reshape(batch_size * heads, 1, -1)
-
-                        thinking_attn = (attn_probs * mask).sum(dim=-1)
-                        thinking_attn = thinking_attn.mean(dim=-1).view(batch_size, heads)
-                        thinking_attn_collector.append(
-                            {
-                                "layer_idx": getattr(self, "_block_idx", None),
-                                "thinking_attn_mean": thinking_attn.detach().cpu(),
-                            }
-                        )
-            except Exception:
-                pass
         if self.final_dropout:
             attn_output = self.final_dropout(attn_output)
 
@@ -333,9 +282,6 @@ class DiT(ModelMixin, ConfigMixin):
         all_hidden_states = [hidden_states]
 
         # Process through transformer blocks
-        thinking_attn_collector = None
-        if DEBUG_THINKING_ATTN:
-            thinking_attn_collector = []
         for idx, block in enumerate(self.transformer_blocks):
             if modulation is not None and film_first_k > 0 and idx < film_first_k:
                 scale, shift = modulation
@@ -348,7 +294,6 @@ class DiT(ModelMixin, ConfigMixin):
                     encoder_attention_mask=None,
                     temb=temb,
                     reasoning_mask=None,
-                    thinking_attn_collector=None,
                 )
             else:
                 hidden_states = block(
@@ -358,19 +303,8 @@ class DiT(ModelMixin, ConfigMixin):
                     encoder_attention_mask=None,
                     temb=temb,
                     reasoning_mask=reasoning_mask,
-                    thinking_attn_collector=thinking_attn_collector,
                 )
             all_hidden_states.append(hidden_states)
-
-        if DEBUG_THINKING_ATTN and thinking_attn_collector is not None:
-            if not hasattr(self, "_thinking_attn_cache"):
-                self._thinking_attn_cache = []
-            step_val = None
-            if timestep is not None and timestep.numel() > 0:
-                step_val = int(timestep.flatten()[0].item())
-            self._thinking_attn_cache.append(
-                {"timestep": step_val, "layers": thinking_attn_collector}
-            )
 
         # Output processing
         conditioning = temb
@@ -380,11 +314,6 @@ class DiT(ModelMixin, ConfigMixin):
             return self.proj_out_2(hidden_states), all_hidden_states
         else:
             return self.proj_out_2(hidden_states)
-
-    def get_and_clear_thinking_attn_cache(self):
-        cache = getattr(self, "_thinking_attn_cache", [])
-        self._thinking_attn_cache = []
-        return cache
 
 
 class SelfAttentionTransformer(ModelMixin, ConfigMixin):

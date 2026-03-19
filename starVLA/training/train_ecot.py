@@ -4,18 +4,10 @@
 
 
 """
-ECoT Implicit Reasoning Training Script for StarVLA
+Latent Reasoning Training Script for StarVLA
 
-This script extends the base training script with ECoT implicit reasoning support:
-- Stage 0: No thinking tokens, using normal forward
-- Stage 2+: With thinking tokens, using KV-Cache iterative forward
-- VLM Loss computation and logging
-- Configuration validation for ECoT settings
-
-Conventions:
-1. Store runtime state in dicts where possible (simplifies data info, processing info, config, etc).  
-2. Use multiple dataloaders to adapt heterogeneous data types / task mixtures.  
-3. Put each training strategy in its own `trainer_*.py` file (avoid large if‑else chains).  
+Training with implicit latent reasoning (thinking tokens + KV-Cache iterative forward).
+Supports VLM loss computation and img_next alignment loss.
 """
 
 # Standard Library
@@ -24,7 +16,7 @@ import json
 import os
 from pathlib import Path
 from typing import Tuple
-from torch.utils.data import Dataset, DataLoader
+from torch.utils.data import DataLoader
 import numpy as np
 import time
 
@@ -38,14 +30,14 @@ from accelerate.logging import get_logger
 from accelerate.utils import set_seed
 from omegaconf import OmegaConf
 from tqdm import tqdm
-from transformers import AutoProcessor, get_scheduler
+from transformers import get_scheduler
 
 # Local Modules
 from starVLA.training.trainer_utils.trainer_tools import normalize_dotlist_args
 from starVLA.model.framework import build_framework
 from starVLA.training.trainer_utils.trainer_tools import TrainerUtils
 from starVLA.training.trainer_utils.trainer_tools import build_param_lr_groups
-from starVLA.training.trainer_utils.cot_mode_utils import parse_cot_mode, derive_flags_from_mode
+from starVLA.training.trainer_utils.cot_mode_utils import get_implicit_flags
 
 
 deepspeed_plugin = DeepSpeedPlugin()
@@ -60,11 +52,6 @@ os.environ["TOKENIZERS_PARALLELISM"] = "false"
 from accelerate.logging import get_logger
 
 logger = get_logger(__name__)
-
-
-def load_fast_tokenizer():
-    fast_tokenizer = AutoProcessor.from_pretrained("physical-intelligence/fast", trust_remote_code=True)
-    return fast_tokenizer
 
 
 def setup_directories(cfg) -> Path:
@@ -108,15 +95,7 @@ def prepare_data(cfg, accelerator, output_dir) -> Tuple[DataLoader, DataLoader]:
     reasoning_stage = getattr(cfg.datasets.vla_data.bridge_reasoning, "stage", "unknown")
 
     dataset_py = cfg.datasets.vla_data.dataset_py
-    try:
-        # Try to get data_mix from vla_data (LeRobot format)
-        data_mix = cfg.datasets.vla_data.data_mix
-    except (AttributeError, KeyError):
-        # For ECOT, data_mix is in ecot.*
-        try:
-            data_mix = cfg.datasets.vla_data.ecot.data_mix
-        except (AttributeError, KeyError):
-            data_mix = "unknown"
+    data_mix = getattr(cfg.datasets.vla_data, "data_mix", "unknown")
     logger.info(
         "Creating VLA Dataset with dataset_py=`%s`, data_mix=`%s`, cot_mode=`%s`, stage=`%s`, generate_thinking=%s",
         dataset_py,
@@ -180,138 +159,65 @@ def setup_optimizer_and_scheduler(model, cfg) -> Tuple[torch.optim.Optimizer, to
 
 
 def validate_ecot_config(cfg):
-    """
-    验证 ECoT 隐式推理相关配置的完整性和一致性
-    
-    检查项:
-    1. enable_latent_reasoning 与 scheduled_stage 的一致性
-    2. compute_language_loss 与 enable_latent_reasoning 的关系
-    3. vlm_loss_weight 是否存在且合理
-    4. thinking tokens 配置是否存在
-    """
-    enable_latent_reasoning = cfg.framework.get("enable_latent_reasoning", False)
-    
-    if not enable_latent_reasoning:
-        logger.info("ECoT implicit reasoning is disabled (enable_latent_reasoning=False)")
-        return True
-    
-    logger.info("Validating ECoT implicit reasoning configuration...")
-    
-    # 检查 latent_reasoning 配置
+    """Validate latent reasoning configuration consistency."""
     latent_cfg = cfg.framework.get("latent_reasoning", {})
     if not latent_cfg:
-        logger.warning("⚠️  enable_latent_reasoning=True but latent_reasoning config is missing")
-        logger.warning("   Using default values for latent_reasoning")
-    else:
-        # 检查 compute_language_loss
-        compute_language_loss = latent_cfg.get("compute_language_loss", False)
-        if compute_language_loss:
-            vlm_loss_weight = latent_cfg.get("vlm_loss_weight", 0.1)
-            if not (0.0 <= vlm_loss_weight <= 1.0):
-                logger.warning(f"⚠️  vlm_loss_weight={vlm_loss_weight} is outside recommended range [0.0, 1.0]")
-            logger.info(f"✅ VLM loss will be computed with weight: {vlm_loss_weight}")
-        else:
-            logger.info("ℹ️  VLM loss computation is disabled (compute_language_loss=False)")
-            logger.info("   Only action_loss will be used for training")
-    
-    # 检查 scheduled_stage
-    try:
-        scheduled_stage = cfg.datasets.vla_data.ecot.scheduled_stage
-        logger.info(f"✅ ECoT scheduled_stage: {scheduled_stage}")
-        
-        if scheduled_stage == 0:
-            logger.info("   Stage 0: No thinking tokens, using normal forward")
-        elif scheduled_stage >= 1:
-            logger.info(f"   Stage {scheduled_stage}: With thinking tokens, using forward_latent")
-       
-    except (AttributeError, KeyError):
-        logger.warning("⚠️  enable_latent_reasoning=True but scheduled_stage not found in config")
-        logger.warning("   Assuming scheduled_stage=0")
-    
-    # 检查 thinking tokens 配置
-    if latent_cfg:
-        thinking_token = latent_cfg.get("thinking_token", "<|thinking|>")
-        start_token = latent_cfg.get("start_of_thinking_token", "<|start_of_thinking|>")
-        end_token = latent_cfg.get("end_of_thinking_token", "<|end_of_thinking|>")
-        logger.info(f"✅ Thinking tokens: {thinking_token}, {start_token}, {end_token}")
-    
-    # 检查 img_next 对齐配置
-    img_next_cfg = cfg.framework.get("img_next", {}) if hasattr(cfg, "framework") else {}
+        logger.warning("latent_reasoning config is missing, using defaults")
+        return
+
+    vlm_loss_weight = latent_cfg.get("vlm_loss_weight", 0.1)
+    compute_language_loss = latent_cfg.get("compute_language_loss", False)
+    logger.info(f"Latent reasoning: compute_language_loss={compute_language_loss}, "
+                f"vlm_loss_weight={vlm_loss_weight}")
+
+    reasoning_stage = getattr(cfg.datasets.vla_data.bridge_reasoning, "stage", 4)
+    logger.info(f"Bridge reasoning stage: {reasoning_stage}")
+
+    img_next_cfg = cfg.framework.get("img_next", {})
     if img_next_cfg and img_next_cfg.get("enable", False):
-        res = img_next_cfg.get("res", None)
-        token = img_next_cfg.get("token", "<img_next>")
-        loss_w = img_next_cfg.get("loss_weight", None)
-        use_teacher = img_next_cfg.get("use_teacher", True)
-        if res is not None and res != 112:
-            logger.warning(f"⚠️ img_next.res={res}, 当前实现假设112x112输出16 token，请确保与配置/数据一致")
-        if loss_w is None or loss_w <= 0:
-            logger.warning(f"⚠️ img_next.loss_weight={loss_w} 非正，将导致 loss 不生效")
-        logger.info(f"✅ img_next: token={token}, res={res}, loss_weight={loss_w}, use_teacher={use_teacher}")
-        logger.info("ℹ️ 若样本缺少 image_next，将自动 fallback 且跳过 img_next_loss")
-    
-    logger.info("✅ ECoT configuration validation completed")
-    return True
+        logger.info(f"img_next: res={img_next_cfg.get('res')}, "
+                    f"loss_weight={img_next_cfg.get('loss_weight')}, "
+                    f"use_teacher={img_next_cfg.get('use_teacher', True)}")
+
+    logger.info("Config validation passed")
 
 
 def sync_bridge_reasoning_to_framework(cfg):
     """
-    If bridge_reasoning is enabled and stage >= 2, ensure latent reasoning
-    is enabled in the framework config and thinking tokens are aligned.
+    Sync thinking token definitions from bridge_reasoning (dataloader side)
+    to framework.latent_reasoning (model side), ensuring both use the same tokens.
     """
-
-    def _get(obj, key, default=None):
-        if obj is None:
-            return default
-        if isinstance(obj, dict):
-            return obj.get(key, default)
-        return getattr(obj, key, default)
-
     try:
         bridge_cfg = cfg.datasets.vla_data.bridge_reasoning
     except AttributeError:
-        bridge_cfg = None
-    if bridge_cfg is None:
         return
 
-    enable = _get(bridge_cfg, "enable", False)
-    stage = int(_get(bridge_cfg, "stage", 0) or 0)
-    if not enable or stage < 1:
+    if not getattr(bridge_cfg, "enable", False):
         return
 
-    # Ensure latent reasoning is enabled
-    if not hasattr(cfg.framework, "enable_latent_reasoning") or not cfg.framework.enable_latent_reasoning:
-        cfg.framework.enable_latent_reasoning = True
+    cfg.framework.enable_latent_reasoning = True
 
     latent_cfg = getattr(cfg.framework, "latent_reasoning", None)
     if latent_cfg is None:
         cfg.framework.latent_reasoning = {}
         latent_cfg = cfg.framework.latent_reasoning
 
-    def _set_latent(key, value):
+    def _set(key, value):
         if isinstance(latent_cfg, dict):
             latent_cfg[key] = value
         else:
             setattr(latent_cfg, key, value)
 
-    thinking_token = _get(bridge_cfg, "thinking_token", _get(latent_cfg, "thinking_token", "<|thinking|>"))
-    start_token = _get(bridge_cfg, "start_token", _get(latent_cfg, "start_of_thinking_token", "<|start_of_thinking|>"))
-    end_token = _get(bridge_cfg, "end_token", _get(latent_cfg, "end_of_thinking_token", "<|end_of_thinking|>"))
-    tag2think = _get(bridge_cfg, "tag2think_count", _get(latent_cfg, "tag2think_count", None))
+    # Sync token definitions: bridge_reasoning is the single source of truth
+    _set("thinking_token", getattr(bridge_cfg, "thinking_token", "<|thinking|>"))
+    _set("start_of_thinking_token", getattr(bridge_cfg, "start_token", "<|start_of_thinking|>"))
+    _set("end_of_thinking_token", getattr(bridge_cfg, "end_token", "<|end_of_thinking|>"))
 
-    _set_latent("thinking_token", thinking_token)
-    _set_latent("start_of_thinking_token", start_token)
-    _set_latent("end_of_thinking_token", end_token)
+    tag2think = getattr(bridge_cfg, "tag2think_count", None)
     if tag2think is not None:
-        _set_latent("tag2think_count", tag2think)
+        _set("tag2think_count", tag2think)
 
-    # Stage >=1 需要在 "instruction @ ..." 之后计算语言损失；Stage 2+ 额外包含 latent span
-    _set_latent("compute_language_loss", True)
-    vlm_loss_weight = _get(
-        bridge_cfg,
-        "vlm_loss_weight",
-        _get(latent_cfg, "vlm_loss_weight", 0.1),
-    )
-    _set_latent("vlm_loss_weight", vlm_loss_weight)
+    _set("compute_language_loss", True)
 
 
 class ECOTVLATrainer(TrainerUtils):
@@ -567,28 +473,13 @@ class ECOTVLATrainer(TrainerUtils):
             logger.info(f"  Per device batch size = {self.config.datasets.vla_data.per_device_batch_size}")
             logger.info(f"  Gradient accumulation steps = {self.config.trainer.gradient_accumulation_steps}")
             logger.info(f"  Total batch size = {self.total_batch_size}")
-            
-            # ECoT Implicit Reasoning Configuration
-            enable_latent_reasoning = self.config.framework.get("enable_latent_reasoning", False)
-            if enable_latent_reasoning:
-                latent_cfg = self.config.framework.get("latent_reasoning", {})
-                compute_language_loss = latent_cfg.get("compute_language_loss", False)
-                vlm_loss_weight = latent_cfg.get("vlm_loss_weight", 0.1)
-                
-                # 获取 scheduled_stage（可能在 ecot.* 中）
-                try:
-                    scheduled_stage = self.config.datasets.vla_data.ecot.get("scheduled_stage", 0)
-                except (AttributeError, KeyError):
-                    scheduled_stage = 0
-                
-                logger.info("***** ECoT Implicit Reasoning Configuration *****")
-                logger.info(f"  Enable Latent Reasoning: {enable_latent_reasoning}")
-                logger.info(f"  Scheduled Stage: {scheduled_stage}")
-                logger.info(f"  Compute Language Loss: {compute_language_loss}")
-                if compute_language_loss:
-                    logger.info(f"  VLM Loss Weight: {vlm_loss_weight}")
-                else:
-                    logger.info(f"  VLM Loss: Disabled (compute_language_loss=False)")
+
+            latent_cfg = self.config.framework.get("latent_reasoning", {})
+            reasoning_stage = getattr(self.config.datasets.vla_data.bridge_reasoning, "stage", 4)
+            logger.info("***** Latent Reasoning Configuration *****")
+            logger.info(f"  Reasoning Stage: {reasoning_stage}")
+            logger.info(f"  Compute Language Loss: {latent_cfg.get('compute_language_loss', False)}")
+            logger.info(f"  VLM Loss Weight: {latent_cfg.get('vlm_loss_weight', 0.1)}")
 
     def _train_step(self, batch_vla, batch_vlm=None):
         """execute single training step"""
@@ -667,28 +558,21 @@ class ECOTVLATrainer(TrainerUtils):
 
 def main(cfg) -> None:
     logger.info("ECoT VLA Training :: Warming Up")
-    
-    cot_mode = parse_cot_mode(cfg)
-    mode_flags = derive_flags_from_mode(cot_mode)
-    
-    # 注入派生配置到 cfg（保持向后兼容）
-    cfg.framework.enable_latent_reasoning = mode_flags["enable_latent_reasoning"]
-    cfg.framework.emit_thinking_tokens = mode_flags.get("emit_thinking_tokens", False)
-    cfg.framework.cot_mode_flags = mode_flags  # 方便下游数据/日志使用
+
+    mode_flags = get_implicit_flags()
+
+    # Inject derived flags into cfg
+    cfg.framework.enable_latent_reasoning = True
+    cfg.framework.emit_thinking_tokens = False
+    cfg.framework.cot_mode = "implicit"
+    cfg.framework.cot_mode_flags = mode_flags
+
     training_stage = getattr(cfg.framework, "training_stage", "full")
-    if training_stage in ("reasoning_only", "action_only"):
-        logger.info(
-            "[CotMode] training_stage=%s，保持现有 bridge_reasoning/ecot stage，不覆写（当前为 %s / %s）",
-            training_stage,
-            getattr(cfg.datasets.vla_data.bridge_reasoning, "stage", None),
-            getattr(cfg.datasets.vla_data.ecot, "scheduled_stage", None),
-        )
-    else:
+    if training_stage == "full":
         cfg.datasets.vla_data.bridge_reasoning.stage = mode_flags["reasoning_stage"]
-        cfg.datasets.vla_data.ecot.scheduled_stage = mode_flags["reasoning_stage"]
-    
-    logger.info(f"[CotMode] mode={cot_mode.value}, flags={mode_flags}")
-    # Sync bridge reasoning config with framework latent reasoning settings
+
+    logger.info(f"[Implicit Reasoning] training_stage={training_stage}, flags={mode_flags}")
+
     sync_bridge_reasoning_to_framework(cfg)
 
     # Validate ECoT configuration
@@ -736,12 +620,5 @@ if __name__ == "__main__":
     dotlist = normalize_dotlist_args(clipargs)  # Normalize CLI args to dotlist format
     cli_cfg = OmegaConf.from_dotlist(dotlist)
     cfg = OmegaConf.merge(cfg, cli_cfg)
-
-    # if cfg.is_debug:
-    if cfg.is_debug and dist.is_initialized() and dist.get_rank() == 0:
-        import debugpy
-        debugpy.listen(("0.0.0.0", 10092))
-        print("🔍 Rank 0 waiting for debugger attach on port 10092...")
-        debugpy.wait_for_client()
 
     main(cfg)

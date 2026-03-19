@@ -6,7 +6,7 @@ from torch.utils.data import DataLoader
 import numpy as np
 import torch.distributed as dist
 from pathlib import Path
-from starVLA.dataloader.vlm_datasets import make_vlm_dataloader
+# from starVLA.dataloader.vlm_datasets import make_vlm_dataloader
 
 logger = get_logger(__name__)
 

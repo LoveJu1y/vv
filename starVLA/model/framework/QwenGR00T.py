@@ -31,7 +31,6 @@ IGNORE_INDEX = -100
 from starVLA.model.framework.base_framework import baseframework
 from starVLA.model.modules.vlm import get_vlm_model
 from starVLA.model.modules.action_model.GR00T_ActionHeader import get_action_model, FlowmatchingActionHead
-from starVLA.model.modules.action_model.flow_matching_head import cross_attention_dit as dit_debug
 from starVLA.training.trainer_utils.trainer_tools import resize_images
 from starVLA.model.tools import FRAMEWORK_REGISTRY
 
@@ -990,24 +989,12 @@ class Qwen_GR00T(baseframework):
                 img_next_mask=img_next_mask,
             )  # (B, chunk_len, action_dim)
 
-        if getattr(dit_debug, "DEBUG_THINKING_ATTN", False):
-            try:
-                cache = self.action_model.model.get_and_clear_thinking_attn_cache()
-                if cache:
-                    out_dir = "/share/project/lvjing/starVLA/results/ANALY"
-                    os.makedirs(out_dir, exist_ok=True)
-                    out_path = os.path.join(out_dir, "thinking_attn_cache.pt")
-                    torch.save(cache, out_path)
-            except Exception as exc:
-                logger.warning(f"[thinking_attn] failed to save cache: {exc}")
-
         normalized_actions = pred_actions.detach().cpu().numpy()
         return {"normalized_actions": normalized_actions, "thinking_gen_time": thinking_gen_time}
 
     def _extract_reasoning_mask(self, qwen_inputs) -> Optional[torch.Tensor]:
         if not (self.use_reasoning_summary or self.use_reasoning_film):
-            if not getattr(dit_debug, "DEBUG_THINKING_ATTN", False):
-                return None
+            return None
         thinking_token_id = getattr(self.qwen_vl_interface, "thinking_token_id", None)
         if thinking_token_id is None:
             return None
@@ -1030,77 +1017,36 @@ class Qwen_GR00T(baseframework):
 
 if __name__ == "__main__":
     from omegaconf import OmegaConf
-    import debugpy
     import argparse
     parser = argparse.ArgumentParser()
     parser.add_argument("--config_yaml", type=str, default="./starVLA/config/training/starvla_cotrain_oxe.yaml", help="Path to YAML config")
     args, clipargs = parser.parse_known_args()
 
-    debugpy.listen(("0.0.0.0", 10092))
-    print("🔍 Rank 0 waiting for debugger attach on port 10092...")
-    debugpy.wait_for_client()
-
     cfg = OmegaConf.load(args.config_yaml)
-    # try get model
     cfg.framework.qwenvl.base_vlm = "./playground/Pretrained_models/Qwen3-VL-4B-Instruct"
-     
+
     model: Qwen_GR00T = Qwen_GR00T(cfg)
     print(model)
 
-
-
-    # fake sample 
+    # Smoke test with fake data
     image = Image.fromarray(np.random.randint(0, 255, (224, 224, 3), dtype=np.uint8))
-    # Create a sample
     sample = {
-        "action": np.random.uniform(-1, 1, size=(16, 7)).astype(np.float16), # action_chunk, action_dim
-        "image": [image, image], # two views
+        "action": np.random.uniform(-1, 1, size=(16, 7)).astype(np.float16),
+        "image": [image, image],
         "lang": "This is a fake for testing.",
-        "state" : np.random.uniform(-1, 1, size=(1, 7)).astype(np.float16), # chunk, state_dim
+        "state": np.random.uniform(-1, 1, size=(1, 7)).astype(np.float16),
     }
 
-    batch  = [sample, sample]  # batch size 2
+    batch = [sample, sample]
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     model = model.to(device)
+
     forward_output = model(batch)
-    action_loss = forward_output['action_loss']
-    print(f"Action Loss: {action_loss.item()}")
+    print(f"Action Loss: {forward_output['action_loss'].item()}")
 
-    # test predict action
-    predict_output = model.predict_action(batch_images=[batch[0]["image"]], instructions=[batch[0]["lang"]], state=[batch[0]["state"]])
-    normalized_actions = predict_output['normalized_actions']
-    print(f"Unnormalized Action: {normalized_actions}")
-
-    # # Advance: try forward model with dataloader
-    # # can be fake sample， but here get from dataloader for simpler
-    # from starVLA.dataloader.lerobot_datasets import get_vla_dataset, collate_fn
-
-    # vla_dataset_cfg = cfg.datasets.vla_data
-    # dataset = get_vla_dataset(data_cfg=vla_dataset_cfg)
-
-    # from torch.utils.data import DataLoader
-
-    # train_dataloader = DataLoader(
-    #     dataset,
-    #     batch_size=2,
-    #     num_workers=1,  # For Debug
-    #     collate_fn=collate_fn,
-    # )
-    # # 
-    # for batch in tqdm(train_dataloader, desc="Processing Batches"):
-    #     batch
-    #     break
-
-    # # try get model
-    # device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-    # model = model.to(device)
-    # model(batch)
-
-    # action = model.predict_action(batch_images=[batch[0]["image"]], instructions=[batch[0]["lang"]])
-
-    # # fake state
-    # for ba in batch:
-    #     ba["state"] = ba["action"][0][None]
-
-    # model(batch)
-    # action = model.predict_action(batch_images=[batch[0]["image"]], instructions=[batch[0]["lang"]], state=[batch[0]["state"]])
+    predict_output = model.predict_action(
+        batch_images=[batch[0]["image"]],
+        instructions=[batch[0]["lang"]],
+        state=[batch[0]["state"]],
+    )
+    print(f"Predicted Action: {predict_output['normalized_actions']}")
