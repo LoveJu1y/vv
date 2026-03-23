@@ -3,22 +3,17 @@
 # Implemented by [Jinhui YE / HKUST University] in [2025].
 
 import torch
-import time
 import copy
 from typing import Optional, List, Tuple
 from transformers.modeling_outputs import CausalLMOutputWithPast
 from transformers import Qwen3VLForConditionalGeneration, AutoProcessor
 from torch.nn.utils.rnn import pad_sequence
-from transformers import BatchFeature
-from transformers.cache_utils import DynamicCache
-
-from qwen_vl_utils import process_vision_info
 
 
 from starVLA.training.trainer_utils import initialize_overwatch
 
 logger = initialize_overwatch(__name__)
-BASE_PROMPT_1='Robot task reasoning: first output the Subtask to preform next, then output the BBox of target object, then generate the Motion Reasoning. Instruction:'
+BASE_PROMPT='Robot task reasoning: first output the Subtask to preform next, then output the BBox of target object, then generate the Motion Reasoning. Instruction:'
 IGNORE_INDEX = -100
 
 IMAGE_TOKEN_INDEX = 151655
@@ -498,71 +493,32 @@ class _QWen3_VL_Interface(nn.Module):
             # Build once, slice per forward call.
             full_attention = self._build_img_next_full_attention_mask(attention_mask=attention_mask, input_ids=input_ids)
 
-        # Helper for debugging visual inputs
-        def _describe_pixel_values(pv):
-            if pv is None:
-                return "None"
-            try:
-                if isinstance(pv, dict):
-                    return {k: tuple(v.shape) for k, v in pv.items()}
-                if hasattr(pv, "shape"):
-                    return tuple(pv.shape)
-            except Exception:
-                return str(type(pv))
-            return str(type(pv))
-
-        def _slice_describe_ids(end_idx: int):
-            try:
-                slice_len = end_idx if end_idx is not None else input_ids.shape[1]
-                image_token_counts = (input_ids[:, :slice_len] == IMAGE_TOKEN_INDEX).sum(dim=1).tolist()
-                thinking_counts = (
-                    (input_ids[:, :slice_len] == thinking_token_id).sum(dim=1).tolist()
-                    if thinking_token_id is not None else None
-                )
-                seq_lengths = attention_mask[:, :slice_len].sum(dim=1).tolist()
-                return image_token_counts, thinking_counts, seq_lengths
-            except Exception as exc:
-                logger.warning(f"[forward_latent] Failed to summarise token stats: {exc}")
-                return None, None, None
-
         def _log_visual_mismatch(stage: str, s_idx: int, e_idx: int, error: ValueError):
-            img_counts, think_counts, seq_lengths = _slice_describe_ids(e_idx)
-            logger.error(
-                "[forward_latent:%s] ValueError: %s | slice=(%s:%s) seq_lengths=%s image_tokens=%s thinking_tokens=%s pixel_values=%s",
-                stage,
-                error,
-                s_idx,
-                e_idx,
-                seq_lengths,
-                img_counts,
-                think_counts,
-                _describe_pixel_values(pixel_values),
-            )
-            logger.error(
-                "[forward_latent:%s] Shapes => input_ids=%s attention_mask=%s inputs_embeds=%s pixel_values=%s image_grid_thw=%s",
-                stage,
-                tuple(input_ids.shape) if input_ids is not None else None,
-                tuple(attention_mask.shape) if attention_mask is not None else None,
-                tuple(inputs_embeds.shape),
-                tuple(pixel_values.shape) if pixel_values is not None and hasattr(pixel_values, "shape") else _describe_pixel_values(pixel_values),
-                tuple(image_grid_thw.shape) if image_grid_thw is not None and hasattr(image_grid_thw, "shape") else _describe_pixel_values(image_grid_thw),
-            )
-            # Try to decode first sample for inspection
+            """Log diagnostic info when image features / tokens mismatch."""
+            def _shape(t):
+                if t is None:
+                    return None
+                return tuple(t.shape) if hasattr(t, "shape") else str(type(t))
             try:
-                sample_tokens = input_ids[0, : e_idx if e_idx is not None else input_ids.shape[1]].detach().cpu()
-                decoded = self.processor.tokenizer.decode(sample_tokens, skip_special_tokens=False)
-                logger.error("[forward_latent:%s] Sample[0] decoded (truncated): %.200s", stage, decoded)
-            except Exception as decode_exc:
-                logger.error("[forward_latent:%s] Failed to decode sample: %s", stage, decode_exc)
+                sl = e_idx if e_idx is not None else input_ids.shape[1]
+                img_cnt = (input_ids[:, :sl] == IMAGE_TOKEN_INDEX).sum(dim=1).tolist()
+                think_cnt = (input_ids[:, :sl] == thinking_token_id).sum(dim=1).tolist() if thinking_token_id else None
+                logger.error(
+                    "[forward_latent:%s] %s | slice=(%s:%s) img_tokens=%s think_tokens=%s "
+                    "input_ids=%s pixel_values=%s image_grid_thw=%s",
+                    stage, error, s_idx, e_idx, img_cnt, think_cnt,
+                    _shape(input_ids), _shape(pixel_values), _shape(image_grid_thw),
+                )
+            except Exception as diag_exc:
+                logger.error("[forward_latent:%s] %s (diagnostics failed: %s)", stage, error, diag_exc)
             return error
         
         # If no thinking tokens, skip iterative reasoning
         if max_n_latents == 0:
             logger.info(
-                "[forward_latent] No thinking tokens found (max_n_latents=0), running normal forward pass | input_ids=%s attention_mask=%s pixel_values=%s",
+                "[forward_latent] No thinking tokens, normal forward | input_ids=%s attention_mask=%s",
                 tuple(input_ids.shape),
                 tuple(attention_mask.shape),
-                _describe_pixel_values(pixel_values),
             )
             try:
                 with torch.autocast("cuda", dtype=torch.bfloat16):
@@ -765,65 +721,6 @@ class _QWen3_VL_Interface(nn.Module):
             )
         return generation_output
 
-    @torch.inference_mode()
-    def generate_thinking_explicit(
-        self,
-        input_ids: torch.Tensor,
-        attention_mask: torch.Tensor,
-        pixel_values: Optional[torch.Tensor] = None,
-        image_grid_thw: Optional[torch.Tensor] = None,
-        max_thinking_len: int = 256,
-        temperature: float = 0.1,
-        top_p: float = 0.9,
-        **kwargs,
-    ):
-        """
-        显式自回归生成思维文本，返回完整序列与生成耗时。
-        """
-        t0 = time.perf_counter()
-        # Stop criteria: always stop on the chat template end token <|im_end|>.
-        # (This is the tokenizer EOS for Qwen chat models.)
-        tok = self.processor.tokenizer
-        eos_id = tok.eos_token_id
-        try:
-            im_end_id = tok.convert_tokens_to_ids("<|im_end|>")
-            if im_end_id is not None and im_end_id != tok.unk_token_id:
-                eos_id = int(im_end_id)
-        except Exception:
-            pass
-
-        gen_output = self.model.generate(
-            input_ids=input_ids,
-            attention_mask=attention_mask,
-            pixel_values=pixel_values,
-            image_grid_thw=image_grid_thw,
-            max_new_tokens=max_thinking_len,
-            do_sample=True,
-            temperature=temperature,
-            top_p=top_p,
-            # eos_token_id=eos_id,
-            pad_token_id=self.processor.tokenizer.pad_token_id,
-            output_hidden_states=False,
-            return_dict_in_generate=True,
-        )
-        t1 = time.perf_counter()
-
-        generated_ids = gen_output.sequences  # [B, prompt+thinking]
-
-        # 解码生成部分文本，便于日志/调试
-        thinking_texts = []
-        prompt_len = input_ids.shape[1]
-        for seq in generated_ids:
-            gen_tokens = seq[prompt_len:]
-            text = self.processor.tokenizer.decode(gen_tokens, skip_special_tokens=False)
-            thinking_texts.append(text)
-
-        return {
-            "generated_ids": generated_ids,
-            "thinking_text": thinking_texts,
-            "gen_time": t1 - t0,
-        }
-
     def load_state_dict(self, state_dict, strict: bool = True):
         """
         Allow loading checkpoints that包含 visual_ema 权重，即便当前配置关闭了 teacher。
@@ -871,14 +768,7 @@ class _QWen3_VL_Interface(nn.Module):
 
         for imgs, instruction in zip(images, instructions):
             content = [{"type": "image", "image": img} for img in imgs]
-
-            if "CoT_prompt" in self.config.datasets.vla_data:  # If using a grounding prompt to task
-                CoT_prompt = self.config.datasets.vla_data.get("CoT_prompt", "")
-                prompt = CoT_prompt.replace("{instruction}", instruction)
-            else:
-                prompt = instruction
-            prompt = instruction
-            content.append({"type": "text", "text": prompt})
+            content.append({"type": "text", "text": instruction})
             msg = [{"role": "user", "content": content}]
 
             if solutions is not None:
@@ -955,19 +845,9 @@ class _QWen3_VL_Interface(nn.Module):
         for sample_idx, (imgs, instruction) in enumerate(zip(images, instructions)):
             content = [{"type": "image", "image": img} for img in imgs]
 
-            if "CoT_prompt" in self.config.datasets.vla_data:
-                CoT_prompt = self.config.datasets.vla_data.get("CoT_prompt", "")
-                prompt = CoT_prompt.replace("{instruction}", instruction)
-            else:
-                if self.config.framework.cot_mode == "none":
-                    prompt = instruction
-                else:
-                    base_prompt = BASE_PROMPT_1
-                    prompt = f"{base_prompt} {instruction}"
-                    # print(f"prompt: {prompt}")
+            base_prompt = BASE_PROMPT
+            prompt = f"{base_prompt} {instruction}"
 
-            # Minimal action integration: append action token string directly into prompt text so it
-            # goes through the same chat template + tokenization + padding pipeline.
             if action_tokens is not None and isinstance(action_tokens, (list, tuple)) and sample_idx < len(action_tokens):
                 act_text = action_tokens[sample_idx] or ""
                 if act_text:
@@ -997,56 +877,15 @@ class _QWen3_VL_Interface(nn.Module):
         ids_cpu = batched_ids.cpu()
         mask_cpu = batched_mask.cpu()
         
-        # Extract per-sample sequences (keep full length, alignment will handle padding)
         input_ids_list = [ids_cpu[b] for b in range(B)]
         attention_mask_list = [mask_cpu[b] for b in range(B)]
 
-        # Debug: verify image_pad counts per sample before alignment
-        image_pad_token_id = 151655
-        if image_pad_token_id is None:
-            try:
-                image_pad_token_id = self.processor.tokenizer.convert_tokens_to_ids("<|image_pad|>")
-                self._image_pad_token_id = image_pad_token_id
-            except Exception:
-                image_pad_token_id = None
-
-        # if image_pad_token_id is not None:
-        #     for sample_idx, (ids, sample_imgs, instruction) in enumerate(zip(input_ids_list, images, instructions)):
-        #         pad_count = int((ids == image_pad_token_id).sum().item())
-        #         expected_count = len(sample_imgs) * 64  # each image contributes 64 vision patches at 224x224
-        #         if pad_count != expected_count:
-        #             logger.warning(
-        #                 "[build_qwenvl_inputs_with_alignment] image_pad mismatch on sample %d: count=%d expected=%d | "
-        #                 "instruction=%r input_ids_shape=%s attention_mask_shape=%s",
-        #                 sample_idx,
-        #                 pad_count,
-        #                 expected_count,
-        #                 instruction,
-        #                 tuple(ids.shape),
-        #                 tuple(attention_mask_list[sample_idx].shape),
-        #             )
-        #             try:
-        #                 decoded = self.processor.tokenizer.decode(ids, skip_special_tokens=False)
-        #                 logger.warning(
-        #                     "[build_qwenvl_inputs_with_alignment] sample %d decoded (truncated): %.200s",
-        #                     sample_idx,
-        #                     decoded,
-        #                 )
-        #             except Exception as decode_exc:
-        #                 logger.warning(
-        #                     "[build_qwenvl_inputs_with_alignment] failed to decode sample %d: %s",
-        #                     sample_idx,
-        #                     decode_exc,
-        #                 )
-        
         # Align thinking tokens (position_ids will be computed by Qwen3-VL internally)
         input_ids_list, attention_mask_list = self._align_thinking_tokens(
             input_ids_list, attention_mask_list, thinking_token_id, model_max_length, pad_token_id
         )
         
         # Re-batch the aligned inputs
-        from torch.nn.utils.rnn import pad_sequence
-        
         input_ids = pad_sequence(input_ids_list, batch_first=True, padding_value=pad_token_id)
         attention_mask = pad_sequence(attention_mask_list, batch_first=True, padding_value=0)
         
@@ -1408,24 +1247,3 @@ class _QWen3_VL_Interface(nn.Module):
             labels[labels == img_next_id] = IGNORE_INDEX
 
         return labels
-
-
-
-
-if __name__ == "__main__":
-    from omegaconf import OmegaConf
-    import debugpy
-    import argparse
-    parser = argparse.ArgumentParser()
-    parser.add_argument("--config_yaml", type=str, default="./starVLA/config/training/starvla_cotrain_oxe.yaml", help="Path to YAML config")
-    args, clipargs = parser.parse_known_args()
-
-    debugpy.listen(("0.0.0.0", 10092))
-    print("🔍 Rank 0 waiting for debugger attach on port 10092...")
-    debugpy.wait_for_client()
-
-    cfg = OmegaConf.load(args.config_yaml)
-    
-    cfg.framework.qwenvl.base_vlm = "./playground/Pretrained_models/Qwen3-VL-4B-Instruct"
-    qwen_vl = _QWen3_VL_Interface(cfg)
-    pass

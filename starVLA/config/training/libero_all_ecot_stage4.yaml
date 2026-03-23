@@ -102,6 +102,8 @@ framework:
       positional_embeddings: null
 
 trainer:
+  pretrained_checkpoint: null
+  reload_modules: null
   max_train_steps: 60000
   epochs: null
   gradient_accumulation_steps: 1

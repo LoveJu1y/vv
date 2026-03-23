@@ -352,7 +352,7 @@ class Qwen_GR00T(LatentAnalysisMixin, baseframework):
                         resized.append(img)
                 flat_images = resized
             
-            # 使用 processor.image_processor 预处理，保持原视觉配置；后续再池化到 16 tokens
+           
             img_processor = getattr(proc, "image_processor", None)
             if img_processor is None:
                 logger.warning("[img_next_loss] processor.image_processor is None, skip img_next_loss")

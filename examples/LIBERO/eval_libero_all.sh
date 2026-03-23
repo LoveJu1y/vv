@@ -1,37 +1,5 @@
 #!/usr/bin/env bash
-# ============================================================================
-# LIBERO 并行评测脚本（implicit latent reasoning / 多 server 多端口）
-#
-# 目标：参考 examples/SimplerEnv/star_bridge_lerobot_latent.sh 的模式：
-#   - 为每个 suite 启动一个独立的 websocket server（不同 port）
-#   - 同时启动多个 eval 进程（每个 suite 连接自己的 port）
-#
-# 用法：
-#   YOUR_CKPT=/abs/path/to/steps_xxx_pytorch_model.pt bash examples/LIBERO/eval_libero_parallel_job.sh
-# 或：
-#   bash examples/LIBERO/eval_libero_parallel_job.sh /abs/path/to/steps_xxx_pytorch_model.pt
-#
-# 可用环境变量：
-#   TASK_SUITES            逗号分隔，默认 libero_goal,libero_spatial,libero_object,libero_10
-#   NUM_TRIALS_PER_TASK    每个任务 rollout 次数，默认 50
-#   BASE_PORT              起始端口，默认 10093（会占用 BASE_PORT..BASE_PORT+N-1）
-#   CUDA_VISIBLE_DEVICES   GPU 池（逗号分隔）；server 会轮询分配到这些 GPU
-#   GPU_ID                 未设置 CUDA_VISIBLE_DEVICES 时使用的单个 GPU（默认 0）
-#   STAR_VLA_PYTHON         server 端 python（默认 /share/project/lvjing/miniconda3/envs/starVLA/bin/python）
-#   LIBERO_PYTHON           eval 端 python（默认 /share/project/lvjing/miniconda3/envs/libero/bin/python）
-#   LIBERO_HOME            默认 /share/project/baishuanghao/code/LIBERO
-#   SAVE_VIDEOS            true/false，默认 false（仅 true 时保存 mp4）
-#   EVAL_DIR               覆写输出目录（默认见下方 A 结构）
-#
-# 输出目录（A）：
-#   CKPT_DIR=.../checkpoints
-#   CKPT_BASENAME=steps_15000_pytorch_model
-#   EVAL_DIR=${CKPT_DIR}/eval_libero_implicit_parallel/${CKPT_BASENAME}/
-#     ├── server_logs/server_${port}.log
-#     ├── logs/${suite}.log            (eval_libero.py 写)
-#     ├── logs/${suite}.stdout.log     (脚本重定向)
-#     └── videos/${suite}/...          (SAVE_VIDEOS=true 才写)
-# ============================================================================
+# 
 set -euo pipefail
 export HF_ENDPOINT=https://hf-mirror.com
 export HF_HOME=/share/project/lvjing/starVLA/qwen_cache

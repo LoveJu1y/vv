@@ -1,28 +1,5 @@
 #!/usr/bin/env bash
-# ============================================================================
-# Batch launcher to evaluate every checkpoint in a directory using
-# examples/LIBERO/eval_libero_all.sh (multi-server, implicit latent).
-#
-# Usage:
-#   bash examples/LIBERO/run_all_ckpts_libero_latent.sh /path/to/checkpoints [MIN_STEP]
-#
-# Notes:
-#   - Checkpoints are evaluated SERIALly (one ckpt after another).
-#   - Within each ckpt, suites may still be evaluated in parallel depending on
-#     eval_libero_all.sh behavior.
-#
-# Environment overrides:
-#   TASK_SUITES            Comma-separated suites to evaluate (default 4)
-#   NUM_TRIALS_PER_TASK    Rollouts per task (default 50)
-#   CUDA_VISIBLE_DEVICES   GPU pool for per-suite servers (comma-separated)
-#   GPU_ID                Used if CUDA_VISIBLE_DEVICES is unset (default 0)
-#   BASE_PORT              Starting port for first ckpt (default 10093)
-#   PORT_STRIDE            Port offset per ckpt (default 50)
-#   MIN_STEP               Only evaluate ckpts with steps >= MIN_STEP (default 20000)
-#   MAX_STEP               Only evaluate ckpts with steps <= MAX_STEP (default unset)
-#   SAVE_VIDEOS            true/false (default false)
-#   STOP_ON_FAIL           true/false (default false; continue on failure)
-# ============================================================================
+
 set -euo pipefail
 export HF_ENDPOINT=https://hf-mirror.com
 export HF_HOME=/share/project/lvjing/starVLA/qwen_cache
