@@ -23,7 +23,7 @@
       scheduled_stage: 4
 ```
 
-**原因：** `train_ecot.py` 的 `main()` 在 implicit 模式下会强制覆写为 4，yaml 中的声明从未被真正读取。
+**原因：** `train.py` 的 `main()` 在 implicit 模式下会强制覆写为 4，yaml 中的声明从未被真正读取。
 
 ---
 
@@ -40,7 +40,7 @@
   emit_thinking_tokens: false
 ```
 
-**原因：** `train_ecot.py` → `main()` 中由 `cot_mode` 自动派生后覆写这两个值。
+**原因：** `train.py` → `main()` 中由 `cot_mode` 自动派生后覆写这两个值。
 
 > 注意：`libero_goal_ecot_stage4.yaml` 中没有这两行（已经是干净的），不需要改。
 
@@ -184,11 +184,11 @@ python -c "from omegaconf import OmegaConf; c = OmegaConf.load('starVLA/config/t
 ## Phase 2：删除死代码（不改逻辑）
 
 > 风险等级：🟢 低（只删除不可达 / 未调用的代码）
-> 验证方式：`python -c "from starVLA.training.train_ecot import main"` 确认 import 不报错
+> 验证方式：`python -c "from starVLA.training.train import main"` 确认 import 不报错
 
-### Step 2.1 — 删除 `train_ecot.py` 中的 `load_fast_tokenizer()`
+### Step 2.1 — 删除 `train.py` 中的 `load_fast_tokenizer()`
 
-**涉及文件：** `starVLA/training/train_ecot.py`（L65-67）
+**涉及文件：** `starVLA/training/train.py`（L65-67）
 
 **操作：** 删除：
 ```python
@@ -203,9 +203,9 @@ def load_fast_tokenizer():
 
 ---
 
-### Step 2.2 — 删除 `train_ecot.py` 中的 debugpy 代码
+### Step 2.2 — 删除 `train.py` 中的 debugpy 代码
 
-**涉及文件：** `starVLA/training/train_ecot.py`（L740-745）
+**涉及文件：** `starVLA/training/train.py`（L740-745）
 
 **操作：** 删除：
 ```python
@@ -302,7 +302,7 @@ from starVLA.model.modules.action_model.flow_matching_head import cross_attentio
 ```bash
 # 确认 import 链不报错
 python -c "from starVLA.model.framework.QwenGR00T import Qwen_GR00T; print('OK')"
-python -c "from starVLA.training.train_ecot import main; print('OK')"
+python -c "from starVLA.training.train import main; print('OK')"
 ```
 
 ---
@@ -339,9 +339,9 @@ def get_implicit_flags() -> dict:
 
 ---
 
-### Step 3.2 — 精简 `train_ecot.py` 的 `main()` 函数
+### Step 3.2 — 精简 `train.py` 的 `main()` 函数
 
-**涉及文件：** `starVLA/training/train_ecot.py`
+**涉及文件：** `starVLA/training/train.py`
 
 **操作 A — 修改 import：**
 
@@ -410,7 +410,7 @@ def main(cfg) -> None:
 
 ### Step 3.3 — 精简 `sync_bridge_reasoning_to_framework()`
 
-**涉及文件：** `starVLA/training/train_ecot.py`（L256-314）
+**涉及文件：** `starVLA/training/train.py`（L256-314）
 
 **操作：** 重写为：
 
@@ -463,7 +463,7 @@ def sync_bridge_reasoning_to_framework(cfg):
 
 ### Step 3.4 — 精简 `validate_ecot_config()`
 
-**涉及文件：** `starVLA/training/train_ecot.py`（L182-253）
+**涉及文件：** `starVLA/training/train.py`（L182-253）
 
 **操作：** 重写为：
 
@@ -502,7 +502,7 @@ def validate_ecot_config(cfg):
 
 ### Step 3.5 — 精简 `prepare_data()` 中的 `data_mix` fallback
 
-**涉及文件：** `starVLA/training/train_ecot.py`（L110-127）
+**涉及文件：** `starVLA/training/train.py`（L110-127）
 
 **操作：** 将：
 ```python
@@ -527,7 +527,7 @@ def validate_ecot_config(cfg):
 
 ### Step 3.6 — 精简 `_log_training_config()` 中的 `scheduled_stage` 读取
 
-**涉及文件：** `starVLA/training/train_ecot.py`（L562-591）
+**涉及文件：** `starVLA/training/train.py`（L562-591）
 
 **操作：** 将 `scheduled_stage` 的读取从：
 ```python
@@ -554,11 +554,11 @@ def validate_ecot_config(cfg):
 
 ```bash
 # 1. 确认 import 链正常
-python -c "from starVLA.training.train_ecot import main; print('OK')"
+python -c "from starVLA.training.train import main; print('OK')"
 
 # 2. 用 1 GPU 跑 10 步（dry-run）
 accelerate launch --num_processes 1 \
-  starVLA/training/train_ecot.py \
+  starVLA/training/train.py \
   --config_yaml starVLA/config/training/libero_all_ecot_stage4.yaml \
   --trainer.max_train_steps 10 \
   --trainer.save_interval 100 \
@@ -661,7 +661,7 @@ python starVLA/model/framework/QwenGR00T.py --config_yaml starVLA/config/trainin
 
 # 2. 实际训练 10 步
 accelerate launch --num_processes 1 \
-  starVLA/training/train_ecot.py \
+  starVLA/training/train.py \
   --config_yaml starVLA/config/training/libero_all_ecot_stage4.yaml \
   --trainer.max_train_steps 10
 ```
@@ -714,17 +714,17 @@ accelerate launch --num_processes 1 \
 | 1 | 1.6 | 3 yaml | steps_cache → null | 🟢 | 2 min |
 | 1 | 1.7 | 1 yaml | 删除 latent_analysis 块 | 🟢 | 2 min |
 | 1 | 1.8 | 1 yaml | exclude_indices → null | 🟢 | 1 min |
-| 2 | 2.1 | train_ecot.py | 删除 load_fast_tokenizer | 🟢 | 2 min |
-| 2 | 2.2 | train_ecot.py | 删除 debugpy | 🟢 | 2 min |
+| 2 | 2.1 | train.py | 删除 load_fast_tokenizer | 🟢 | 2 min |
+| 2 | 2.2 | train.py | 删除 debugpy | 🟢 | 2 min |
 | 2 | 2.3 | QwenGR00T.py | 删除 __main__ debugpy | 🟢 | 2 min |
 | 2 | 2.4 | QwenGR00T.py + dit | 删除 DEBUG_THINKING_ATTN | 🟢 | 10 min |
 | 2 | 2.5 | QwenGR00T.py | 删除注释代码 | 🟢 | 3 min |
 | 3 | 3.1 | cot_mode_utils.py | 重写为 implicit-only | 🟡 | 5 min |
-| 3 | 3.2 | train_ecot.py | 精简 main() | 🟡 | 10 min |
-| 3 | 3.3 | train_ecot.py | 精简 sync 函数 | 🟡 | 10 min |
-| 3 | 3.4 | train_ecot.py | 精简 validate 函数 | 🟡 | 5 min |
-| 3 | 3.5 | train_ecot.py | 精简 prepare_data | 🟡 | 3 min |
-| 3 | 3.6 | train_ecot.py | 精简 _log_training_config | 🟡 | 3 min |
+| 3 | 3.2 | train.py | 精简 main() | 🟡 | 10 min |
+| 3 | 3.3 | train.py | 精简 sync 函数 | 🟡 | 10 min |
+| 3 | 3.4 | train.py | 精简 validate 函数 | 🟡 | 5 min |
+| 3 | 3.5 | train.py | 精简 prepare_data | 🟡 | 3 min |
+| 3 | 3.6 | train.py | 精简 _log_training_config | 🟡 | 3 min |
 | 4 | 4.1 | QwenGR00T.py | 删除 forward explicit | 🟡 | 10 min |
 | 4 | 4.2 | QwenGR00T.py | 删除 predict explicit | 🟡 | 10 min |
 | 4 | 4.3 | QwenGR00T.py | 移出 latent_analysis | 🟡 | 20 min |
@@ -741,7 +741,7 @@ accelerate launch --num_processes 1 \
 ```
 git commit -m "config: remove redundant ecot/latent fields from training yamls"     # Phase 1
 git commit -m "cleanup: remove dead code (debugpy, unused functions)"                # Phase 2
-git commit -m "refactor: simplify train_ecot to implicit-only mode"                  # Phase 3
+git commit -m "refactor: simplify train to implicit-only mode"                  # Phase 3
 git commit -m "refactor: remove explicit CoT branches from QwenGR00T"                # Phase 4
 git commit -m "cleanup: remove DEBUG_THINKING_ATTN from cross_attention_dit"         # Phase 5
 git commit -m "fix: handle null steps_cache_path gracefully"                         # Phase 6

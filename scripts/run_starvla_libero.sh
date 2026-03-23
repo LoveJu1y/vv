@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Libero-all :: train_ecot.py — 仓库根目录: bash scripts/run_starvla_libero.sh
+# Libero-all :: train.py — 仓库根目录: bash scripts/run_starvla_libero.sh
 set -euo pipefail
 export TOKENIZERS_PARALLELISM=false
 
@@ -30,6 +30,6 @@ fi
 exec torchrun \
   --nproc_per_node=1 \
   --master_port=29513 \
-  starVLA/training/train_ecot.py \
+  starVLA/training/train.py \
   "${args[@]}" \
   "$@"

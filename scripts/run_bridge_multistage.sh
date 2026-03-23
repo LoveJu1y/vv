@@ -200,7 +200,7 @@ run_stage() {
     torchrun
     --nproc_per_node="${NUM_GPUS}"
     --master_port="${MASTER_PORT}"
-    starVLA/training/train_ecot.py
+    starVLA/training/train.py
     --config_yaml "${CONFIG_PATH}"
     --run_root_dir "${RUN_ROOT_DIR}"
     --run_id "${run_id}"

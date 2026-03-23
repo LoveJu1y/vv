@@ -2,7 +2,7 @@
 # Bridge-LeRobot :: Latent Reasoning Training
 # ============================================================================
 #  - Dataloader: lerobot_datasets (BRIDGE mix)
-#  - Trainer:    train_ecot.py (implicit latent reasoning)
+#  - Trainer:    train.py (implicit latent reasoning)
 # ============================================================================
 
 run_id: "bridge"

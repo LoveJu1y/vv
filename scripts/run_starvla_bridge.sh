@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Bridge-LeRobot :: train_ecot.py — 仓库根目录: bash scripts/run_starvla_bridge.sh
+# Bridge-LeRobot :: train.py — 仓库根目录: bash scripts/run_starvla_bridge.sh
 set -euo pipefail
 export TOKENIZERS_PARALLELISM=false
 
@@ -29,6 +29,6 @@ fi
 exec torchrun \
   --nproc_per_node=8 \
   --master_port=29512 \
-  starVLA/training/train_ecot.py \
+  starVLA/training/train.py \
   "${args[@]}" \
   "$@"

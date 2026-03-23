@@ -5,8 +5,8 @@
 # - starVLA/config/training/bridge_lerobot_stage2.yaml  (ECoT training scaffold)
 # - starVLA/config/training/starvla_cotrain_libero.yaml (Libero horizons / dims)
 #
-# Key behavior in train_ecot.py:
-# - When framework.training_stage == "full", train_ecot derives stage from framework.cot_mode.
+# Key behavior in train.py:
+# - When framework.training_stage == "full", train derives stage from framework.cot_mode.
 #   For cot_mode=implicit, it will overwrite datasets.vla_data.bridge_reasoning.stage to 4.
 # - When training_stage in ("reasoning_only","action_only"), it will NOT overwrite stage.
 #
@@ -57,7 +57,7 @@ datasets:
 
     bridge_reasoning:
       enable: true
-      stage: 4  # for full+implicit this will be enforced by train_ecot anyway
+      stage: 4  # for full+implicit this will be enforced by train anyway
       include_bbox: true
       include_action_tokens: false
       include_img_next: true
@@ -77,7 +77,7 @@ datasets:
 framework:
   name: "QwenGR00T"
   training_stage: "full"
-  cot_mode: "implicit"          # stage will be overwritten to 4 by train_ecot.py
+  cot_mode: "implicit"          # stage will be overwritten to 4 by train.py
 
   img_next:
     enable: true

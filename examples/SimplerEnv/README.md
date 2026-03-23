@@ -1,55 +1,51 @@
-This document provides instructions for reproducing our **experimental results** with SimplerEnv.  
+## SimplerEnv
 
+This directory contains the recommended SimplerEnv evaluation entrypoints.
 
-## 📦 1. Environment Setup
+Main files:
 
-To set up the environment, please first follow the official [SimplerEnv repository](https://github.com/simpler-env/SimplerEnv) to install the base `simpler_env` environment. 
+- `bridge_eval.sh`: recommended parallel evaluation for one checkpoint
+- `run_all_ckpts_bridge.sh`: batch evaluation for many checkpoints
+- `start_simpler_env.py`: simulator-side evaluation entrypoint
+- `model2simpler_interface.py`: SimplerEnv-side policy adapter
+- `test_your_simplerEnv.py`: quick environment check
 
-Afterwards, inside the `simpler_env` environment, install the following dependencies:  
+## Prerequisites
 
-```bash
-pip install tyro matplotlib mediapy websockets msgpack
-pip install numpy==1.24.4
-```
+You usually need:
 
-⚠️ **Common Issues**
-When testing SimplerEnv on NVIDIA A100, you may encounter the following error:
-`libvulkan.so.1: cannot open shared object file: No such file or directory`
-You can refer to this link to fix: [Installation Guide – Vulkan Section](https://maniskill.readthedocs.io/en/latest/user_guide/getting_started/installation.html#vulkan)
+- one trained checkpoint
+- one StarVLA Python environment
+- one SimplerEnv Python environment
+- `SimplerEnv_PATH`
 
-
-## 🔧 Verification Method
-We provide a minimal environment verification script:
+Useful checks:
 
 ```bash
 python examples/SimplerEnv/test_your_simplerEnv.py
-
 ```
 
-If you see the "✅ Env built successfully" message, it means SimplerEnv is installed correctly and ready to use.
+If this script succeeds, your SimplerEnv setup is likely usable.
 
-
----
-
-
-## 🚀 2. Eval SimplerEnv
-
-Steps:
-1) Download the checkpoint:[Qwen3VL-GR00T-Bridge-RT-1](https://huggingface.co/StarVLA/Qwen3VL-GR00T-Bridge-RT-1)
-
-We also provide a parallel evaluation script:
+## Recommended: Parallel Evaluation
 
 ```bash
-check_pt=StarVLA/Qwen3VL-GR00T-Bridge-RT-1/checkpoints/steps_20000_pytorch_model.pt
-bash examples/SimplerEnv/star_bridge_parall_eval.sh ${check_pt}
+star_vla_python=/path/to/starvla/python \
+sim_python=/path/to/simpler_env/python \
+SimplerEnv_PATH=/path/to/SimplerEnv \
+CUDA_VISIBLE_DEVICES=0,1,2,3 \
+bash examples/SimplerEnv/bridge_eval.sh /abs/path/to/checkpoint.pt
 ```
 
-Before running star_bridge.sh, set the following three paths:
-- star_vla_python: Python interpreter for the StarVLA environment.
-- sim_python: Python interpreter for the SimplerEnv environment.
-- SimplerEnv_PATH: Local path to the SimplerEnv project.
-Alternatively, edit these variables directly at the top of `star_bridge.sh`.
+The script launches policy servers and SimplerEnv tasks in parallel, then writes
+logs under the checkpoint directory unless `LOG_DIR` is overridden.
 
+## Batch Evaluation for Many Checkpoints
 
-
+```bash
+star_vla_python=/path/to/starvla/python \
+sim_python=/path/to/simpler_env/python \
+SimplerEnv_PATH=/path/to/SimplerEnv \
+bash examples/SimplerEnv/run_all_ckpts_bridge.sh /abs/path/to/checkpoints
+```
 

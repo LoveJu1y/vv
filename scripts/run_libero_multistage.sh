@@ -2,7 +2,7 @@
 # Libero-all :: 四阶段课程训练（均为 reasoning_only）
 # - Stage 1：无 pretrained_checkpoint
 # - Stage 2–4：加载上一阶段 checkpoints/steps_<CKPT_STEP[上一阶段]>_pytorch_model.pt
-# train_ecot：training_stage!=full 时不覆盖 bridge_reasoning.stage，每阶段由下方 BRIDGE_STAGE 指定。
+# train：training_stage!=full 时不覆盖 bridge_reasoning.stage，每阶段由下方 BRIDGE_STAGE 指定。
 # 仓库根目录: bash scripts/run_libero_multistage.sh
 set -euo pipefail
 export TOKENIZERS_PARALLELISM=false
@@ -30,7 +30,7 @@ declare -A IMG_NEXT_LOSS_WEIGHT=( [1]=0.1 [2]=0.1 [3]=0.2 [4]=0.2 )
 declare -A PER_DEVICE_BATCH=( [1]=12 [2]=12 [3]=12 [4]=16 )
 declare -A MAX_STEPS=( [1]=5000 [2]=2000 [3]=2000 [4]=2000 )
 
-# 须满足 MAX_STEPS[s] % SAVE_INTERVAL[s] == 0（与 train_ecot 存盘条件一致）
+# 须满足 MAX_STEPS[s] % SAVE_INTERVAL[s] == 0（与 train 存盘条件一致）
 declare -A SAVE_INTERVAL=( [1]=5000 [2]=2000 [3]=2000 [4]=2000 )
 
 # 第 s 阶段结束时文件名 steps_<CKPT_STEP[s]>_pytorch_model.pt 中的步数
@@ -77,7 +77,7 @@ run_one_stage() {
   torchrun \
     --nproc_per_node="${NUM_GPUS}" \
     --master_port="${MASTER_PORT}" \
-    starVLA/training/train_ecot.py \
+    starVLA/training/train.py \
     "${args[@]}" \
     "$@"
 }
