@@ -13,7 +13,7 @@ Main files:
 You usually need:
 
 - one trained checkpoint
-- one StarVLA Python environment
+- one LaRA-VLA Python environment (the code package namespace remains `starVLA`)
 - one LIBERO Python environment
 - `LIBERO_HOME`
 
@@ -35,17 +35,6 @@ TASK_SUITES=libero_goal,libero_spatial,libero_object,libero_10 \
 bash examples/LIBERO/eval_libero_all.sh /abs/path/to/checkpoint.pt
 ```
 
-Useful environment variables:
-
-- `STAR_VLA_PYTHON`
-- `LIBERO_PYTHON`
-- `LIBERO_HOME`
-- `CUDA_VISIBLE_DEVICES`
-- `TASK_SUITES`
-- `BASE_PORT`
-- `NUM_TRIALS_PER_TASK`
-- `SAVE_VIDEOS`
-- `EVAL_DIR`
 
 Outputs are written under:
 
@@ -61,15 +50,5 @@ LIBERO_PYTHON=/path/to/libero/python \
 LIBERO_HOME=/path/to/LIBERO \
 bash examples/LIBERO/run_all_ckpts_libero_all.sh /abs/path/to/checkpoints
 ```
-
-Useful environment variables:
-
-- `MIN_STEP`
-- `MAX_STEP`
-- `BASE_PORT`
-- `PORT_STRIDE`
-- `SAVE_VIDEOS`
-- `STOP_ON_FAIL`
-
 
 

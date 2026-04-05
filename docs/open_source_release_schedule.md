@@ -96,7 +96,7 @@
    - 相对路径
    - 环境变量
    - CLI 参数
-5. 删除私有数据筛选配置，例如 `exclude_task_indices` 的硬编码列表
+5. Review dataset-specific filter configs and remove them only if they are truly private or not meant to be part of the public default setup
 6. 检查根目录和 docs 是否包含内部机器名、用户名、私有目录结构
 
 ### 当前已发现的重点风险

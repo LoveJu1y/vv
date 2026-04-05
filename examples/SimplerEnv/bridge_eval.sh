@@ -1,15 +1,15 @@
 #!/usr/bin/env bash
 # ============================================================================
-# SimplerEnv 并行评测脚本（Stage-4 action-only / latent reasoning）
-# 使用方法：
-#   bash star_bridge_lerobot_latent.sh /path/to/steps_xxxxx_pytorch_model.pt
-# 可用环境变量：
-#   TSET_NUM              每个任务重复次数，默认 1
-#   NUM_EPISODES          每个任务的 episode 数，默认 24
-#   BASE_PORT             起始端口，默认 10120
-#   GPU_ID                未设置 CUDA_VISIBLE_DEVICES 时使用的 GPU（默认 0）
-#   CUDA_VISIBLE_DEVICES  可选，逗号分隔；脚本会在这些 GPU 上并行分配任务
-#   LOG_DIR               日志目录（默认 ckpt_dir/eval_stage4_parallel）
+# SimplerEnv parallel evaluation script (Stage-4 action-only / latent reasoning)
+# Usage:
+#   bash examples/SimplerEnv/bridge_eval.sh /path/to/steps_xxxxx_pytorch_model.pt
+# Environment variables:
+#   TSET_NUM              Repeat count per task, default 1
+#   NUM_EPISODES          Number of episodes per task, default 24
+#   BASE_PORT             Starting port, default 10120
+#   GPU_ID                GPU used when CUDA_VISIBLE_DEVICES is unset (default 0)
+#   CUDA_VISIBLE_DEVICES  Optional comma-separated GPU list for parallel task allocation
+#   LOG_DIR               Log directory (default ckpt_dir/eval_stage4_parallel)
 # ============================================================================
 set -euo pipefail
 
@@ -17,20 +17,46 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_ROOT="$(cd "${SCRIPT_DIR}/../.." && pwd)"
 cd "${REPO_ROOT}"
 
-export star_vla_python=/share/project/lvjing/miniconda3/envs/starVLA/bin/python
-export sim_python=/share/project/lvjing/miniconda3/envs/simpler_env/bin/python
-export SimplerEnv_PATH=${SimplerEnv_PATH:-/share/project/lvjing/SimplerEnv}
+star_vla_python="${star_vla_python:-python}"
+sim_python="${sim_python:-python}"
+SimplerEnv_PATH="${SimplerEnv_PATH:-}"
 export PYTHONPATH="${REPO_ROOT}:${PYTHONPATH:-}"
-export HF_ENDPOINT=https://hf-mirror.com
-export HF_HOME=/share/project/lvjing/starVLA/qwen_cache
+export HF_HOME="${HF_HOME:-${REPO_ROOT}/qwen_cache}"
 
-CKPT_PATH="${1:-/share/project/lvjing/starVLA/results/BridgeFinal_Action/bridge_lerobot_DITB_LR1E-4_LR1E-5_BTS16_60K_FINAL_NO_IMGLOSS_DITB/checkpoints/steps_37500_pytorch_model.pt}"
+require_python() {
+  local label="$1"
+  local value="$2"
+  if [[ -x "${value}" ]]; then
+    return 0
+  fi
+  if command -v "${value}" >/dev/null 2>&1; then
+    return 0
+  fi
+  echo "❌ ${label} is not available: ${value}" >&2
+  exit 1
+}
+
+require_python "star_vla_python" "${star_vla_python}"
+require_python "sim_python" "${sim_python}"
+
+if [[ -z "${SimplerEnv_PATH}" ]]; then
+  echo "❌ Please set SimplerEnv_PATH, for example: SimplerEnv_PATH=/abs/path/to/SimplerEnv" >&2
+  exit 1
+fi
+if [[ ! -d "${SimplerEnv_PATH}" ]]; then
+  echo "❌ SimplerEnv_PATH does not exist: ${SimplerEnv_PATH}" >&2
+  exit 1
+fi
+export SimplerEnv_PATH
+
+DEFAULT_CKPT_PATH="${DEFAULT_CKPT_PATH:-}"
+CKPT_PATH="${1:-${YOUR_CKPT:-${DEFAULT_CKPT_PATH:-}}}"
 if [[ -z "${CKPT_PATH}" ]]; then
-  echo "❌ 请提供模型路径，例如：bash $0 /share/.../steps_10000_pytorch_model.pt"
+  echo "❌ Please provide a checkpoint path, for example: bash $0 /abs/path/to/steps_10000_pytorch_model.pt"
   exit 1
 fi
 if [[ ! -f "${CKPT_PATH}" ]]; then
-  echo "❌ 找不到模型文件: ${CKPT_PATH}"
+  echo "❌ Checkpoint file not found: ${CKPT_PATH}"
   exit 1
 fi
 
@@ -50,12 +76,12 @@ CKPT_BASENAME="$(basename "${CKPT_PATH%.*}")"
 LOG_DIR="${LOG_DIR:-${CKPT_DIR}/eval_stage4_parallel60000}"
 mkdir -p "${LOG_DIR}"
 
-# 推理模式：none / vlm_seen_no_out / explicit / implicit
+# Inference mode: none / vlm_seen_no_out / explicit / implicit
 COT_MODE="${COT_MODE:-implicit}"
 IMG_NEXT_COUNT="${IMG_NEXT_COUNT:-16}"
 
 echo "======================================================"
-echo "📊 Stage-4 SimplerEnv 并行评测"
+echo "📊 Stage-4 SimplerEnv Parallel Evaluation"
 echo "------------------------------------------------------"
 echo "Checkpoint : ${CKPT_PATH}"
 echo "Logs       : ${LOG_DIR}"
@@ -75,7 +101,7 @@ cleanup_port() {
   local stale
   stale=$(ps aux | grep "server_policy.py" | grep "--port ${port}" | grep -v grep | awk '{print $2}' || true)
   if [[ -n "${stale}" ]]; then
-    echo "   清理端口 ${port} 上的旧 server: ${stale}"
+    echo "   Cleaning up stale server processes on port ${port}: ${stale}"
     kill -9 ${stale} 2>/dev/null || true
     sleep 1
   fi
@@ -89,7 +115,7 @@ start_server() {
   local log_file="${server_logs}/${CKPT_BASENAME}_server_${port}.log"
 
   cleanup_port "${port}"
-  echo "▶️  启动策略服务器 (GPU ${gpu_id}, port ${port})"
+  echo "▶️  Starting policy server (GPU ${gpu_id}, port ${port})"
   CUDA_VISIBLE_DEVICES="${gpu_id}" "${star_vla_python}" deployment/model_server/server_policy.py \
     --ckpt_path "${CKPT_PATH}" \
     --port "${port}" \
@@ -102,20 +128,20 @@ start_server() {
   sleep 8
 
   if ! kill -0 "${pid}" 2>/dev/null; then
-    echo "⚠️  Server (port ${port}) 可能启动失败，请检查 ${log_file}"
+    echo "⚠️  Server (port ${port}) may have failed to start. Check ${log_file}"
   fi
 }
 
 stop_all_servers() {
   echo ""
-  echo "⏳ 等待所有评测任务结束..."
+  echo "⏳ Waiting for all evaluation tasks to finish..."
   for pid in "${eval_pids[@]}"; do
     if ps -p "${pid}" > /dev/null 2>&1; then
       wait "${pid}" || true
     fi
   done
 
-  echo "⏹  停止策略服务器..."
+  echo "⏹  Stopping policy servers..."
   for pid in "${policyserver_pids[@]}"; do
     if ps -p "${pid}" > /dev/null 2>&1; then
       kill "${pid}" 2>/dev/null || true
@@ -153,10 +179,10 @@ run_task() {
 
   local tag="run${run_idx}"
   local log_file="${LOG_DIR}/${CKPT_BASENAME}_stage4_${env_name}.log.${tag}"
-  echo "🧪 任务 ${env_name} | 第 ${run_idx}/${TSET_NUM} 次 | GPU ${gpu_id} | 端口 ${port}"
-  echo "   日志: ${log_file}"
+  echo "🧪 Task ${env_name} | run ${run_idx}/${TSET_NUM} | GPU ${gpu_id} | port ${port}"
+  echo "   Log: ${log_file}"
 
-  # 是否启用隐式推理（仅 implicit 模式需要）
+  # Enable implicit reasoning only when COT_MODE=implicit.
   local reasoning_flag=()
   if [[ "${COT_MODE}" == "implicit" ]]; then
     reasoning_flag+=(--enable-latent-reasoning --thinking-token-count 3)
@@ -209,8 +235,8 @@ for task_spec in "${TASKS[@]}"; do
 done
 
 echo ""
-echo "🚀 已启动 ${task_index} 个任务，等待完成..."
+echo "🚀 Started ${task_index} tasks. Waiting for completion..."
 stop_all_servers
 
 echo ""
-echo "✅ Stage-4 并行评测完成，日志位于: ${LOG_DIR}"
+echo "✅ Stage-4 parallel evaluation complete. Logs written to: ${LOG_DIR}"

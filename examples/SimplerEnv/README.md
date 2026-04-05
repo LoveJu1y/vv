@@ -15,7 +15,7 @@ Main files:
 You usually need:
 
 - one trained checkpoint
-- one StarVLA Python environment
+- one LaRA-VLA Python environment (the code package namespace remains `starVLA`)
 - one SimplerEnv Python environment
 - `SimplerEnv_PATH`
 
@@ -48,4 +48,3 @@ sim_python=/path/to/simpler_env/python \
 SimplerEnv_PATH=/path/to/SimplerEnv \
 bash examples/SimplerEnv/run_all_ckpts_bridge.sh /abs/path/to/checkpoints
 ```
-

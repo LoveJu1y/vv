@@ -1,11 +1,11 @@
 #!/usr/bin/env bash
 # ==========================================================================
 # Batch launcher to evaluate every checkpoint in a directory using
-# star_bridge_lerobot_latent.sh. Designed for multi-GPU servers (default 8).
+# examples/SimplerEnv/bridge_eval.sh. Designed for multi-GPU servers (default 8).
 # Supports running up to NUM_SLOTS concurrent evaluations (default = #GPUs).
 # Usage:
-#   bash run_all_ckpts_lerobot_latent.sh \
-#       /share/.../bridge_lerobot_fullcot_stage_bt164/checkpoints [MIN_STEP]
+#   bash examples/SimplerEnv/run_all_ckpts_bridge.sh \
+#       /abs/path/to/checkpoints [MIN_STEP]
 # Environment overrides:
 #   GPU_LIST       Comma list of GPU ids to use (default "0,1,2,3,4,5,6,7")
 #   NUM_SLOTS      Max concurrent ckpt evaluations (default = len(GPU_LIST))
@@ -25,7 +25,8 @@ set -euo pipefail
 # export MKL_NUM_THREADS=${MKL_NUM_THREADS:-1}
 # export NUMEXPR_NUM_THREADS=${NUMEXPR_NUM_THREADS:-1}
 
-CKPT_DIR=${1:-/share/project/lvjing/starVLA/results/BridgeFinal_Action/SDPA5_bridge_lerobot_DITB_LR1E-4_LR1E-5_BTS16_60K_FINAL_NO_IMGLOSS__1.3lr/checkpoints}
+DEFAULT_CKPT_DIR=${DEFAULT_CKPT_DIR:-}
+CKPT_DIR=${1:-${YOUR_CKPT_DIR:-${DEFAULT_CKPT_DIR:-}}}
 MIN_STEP_ARG=${2:-}
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_ROOT="$(cd "${SCRIPT_DIR}/../.." && pwd)"
@@ -40,15 +41,19 @@ if [[ -n "${MIN_STEP_ARG}" ]]; then
 fi
 
 if [[ -n "${MIN_STEP}" ]] && ! [[ "${MIN_STEP}" =~ ^[0-9]+$ ]]; then
-  echo "❌ MIN_STEP 必须是非负整数，当前为: ${MIN_STEP}" >&2
+  echo "❌ MIN_STEP must be a non-negative integer. Got: ${MIN_STEP}" >&2
   exit 1
 fi
 if [[ -n "${MAX_STEP}" ]] && ! [[ "${MAX_STEP}" =~ ^[0-9]+$ ]]; then
-  echo "❌ MAX_STEP 必须是非负整数（或留空），当前为: ${MAX_STEP}" >&2
+  echo "❌ MAX_STEP must be a non-negative integer or empty. Got: ${MAX_STEP}" >&2
+  exit 1
+fi
+if [[ -z "${CKPT_DIR}" ]]; then
+  echo "❌ Please provide a checkpoint directory, for example: bash $0 /abs/path/to/checkpoints [MIN_STEP]" >&2
   exit 1
 fi
 if [[ ! -d "${CKPT_DIR}" ]]; then
-  echo "❌ checkpoint 目录不存在: ${CKPT_DIR}" >&2
+  echo "❌ Checkpoint directory does not exist: ${CKPT_DIR}" >&2
   exit 1
 fi
 
@@ -56,7 +61,7 @@ GPU_LIST=${GPU_LIST:-"0"}
 IFS=',' read -r -a GPU_ARRAY <<< "${GPU_LIST}"
 NUM_GPUS=${#GPU_ARRAY[@]}
 if (( NUM_GPUS == 0 )); then
-  echo "❌ GPU_LIST 为空" >&2
+  echo "❌ GPU_LIST is empty" >&2
   exit 1
 fi
 NUM_SLOTS=${NUM_SLOTS:-${NUM_GPUS}}
@@ -80,7 +85,7 @@ echo "======================================================"
 
 CKPTS=$(ls "${CKPT_DIR}"/steps_*_pytorch_model.pt 2>/dev/null | sort -V)
 if [[ -z "${CKPTS}" ]]; then
-  echo "❌ 未找到 steps_*_pytorch_model.pt 文件" >&2
+  echo "❌ No steps_*_pytorch_model.pt files found" >&2
   exit 1
 fi
 
@@ -98,12 +103,12 @@ for ckpt in ${CKPTS}; do
     fi
     FILTERED_CKPTS+=("${ckpt}")
   else
-    echo "⚠️ 跳过非标准命名 ckpt: ${ckpt}" >&2
+    echo "⚠️ Skipping checkpoint with non-standard name: ${ckpt}" >&2
   fi
 done
 
 if (( ${#FILTERED_CKPTS[@]} == 0 )); then
-  echo "❌ 未找到满足 step 范围的 ckpt（MIN_STEP=${MIN_STEP}, MAX_STEP=${MAX_STEP:-<unset>}）" >&2
+  echo "❌ No checkpoints found within the requested step range (MIN_STEP=${MIN_STEP}, MAX_STEP=${MAX_STEP:-<unset>})" >&2
   exit 1
 fi
 
@@ -174,7 +179,7 @@ for path in logs:
         values.append((os.path.basename(path), val))
 
 if not values:
-    print(f"[Summary] {log_dir}: 未找到 Average success 记录")
+    print(f"[Summary] {log_dir}: no Average success records found")
     sys.exit(0)
 
 mean = sum(v for _, v in values) / len(values)
@@ -216,7 +221,7 @@ for name in sorted(os.listdir(root)):
         entries.append((name, mean_val))
 
 if not entries:
-    print(f"[Overall] 未找到 success_summary.txt，跳过全局汇总")
+    print(f"[Overall] no success_summary.txt files found, skipping global summary")
     sys.exit(0)
 
 with open(out_path, "w") as f:
@@ -224,7 +229,7 @@ with open(out_path, "w") as f:
     for name, val in entries:
         f.write(f"{name}\t{val:.6f}\n")
 
-print(f"[Overall] 成功写入 {len(entries)} 条记录 -> {out_path}")
+print(f"[Overall] wrote {len(entries)} records -> {out_path}")
 PY
 
-echo "✅ 所有 checkpoints 测评完成。日志位于 ${LOG_ROOT}"
+echo "✅ All checkpoint evaluations completed. Logs written to: ${LOG_ROOT}"

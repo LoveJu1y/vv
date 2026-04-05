@@ -152,21 +152,17 @@
 
 ---
 
-### Step 1.8 — 删除 `bridge_lerobot_stage2.yaml` 中的 `exclude_task_indices` 硬编码列表
+### Step 1.8 — 保留 `bridge_lerobot_stage2.yaml` 中经过验证的 `exclude_task_indices` 列表
 
 **涉及文件（1 个）：**
 - `starVLA/config/training/bridge_lerobot_stage2.yaml`（L38）
 
-**操作：** 将：
+**操作：** 保留以下配置：
 ```yaml
         exclude_task_indices: [4,11,338,1176,3656,3922,4446,4865,6552,9814,11386,11704,12032,12708,13667,15039,16104,16392,16914,17286,18937]
 ```
-改为：
-```yaml
-        exclude_task_indices: null
-```
 
-**原因：** 这是你私有数据集的过滤索引，开源用户无法理解其含义。
+**原因：** 这组索引现在被视为有意保留的默认数据过滤配置，而不是临时的私有机器痕迹。既然它对默认训练配方有实际意义，就可以继续保留。
 
 ---
 

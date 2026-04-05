@@ -1,18 +1,17 @@
 #!/usr/bin/env bash
 # 
 set -euo pipefail
-export HF_ENDPOINT=https://hf-mirror.com
-export HF_HOME=/share/project/lvjing/starVLA/qwen_cache
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_ROOT="$(cd "${SCRIPT_DIR}/../.." && pwd)"
 cd "${REPO_ROOT}" || exit 1
+export HF_HOME="${HF_HOME:-${REPO_ROOT}/qwen_cache}"
 
 # Default python interpreters (override via env vars).
-STAR_VLA_PYTHON="${STAR_VLA_PYTHON:-/share/project/lvjing/miniconda3/envs/starVLA/bin/python}"
-LIBERO_PYTHON="${LIBERO_PYTHON:-/share/project/lvjing/miniconda3/envs/libero/bin/python}"
+STAR_VLA_PYTHON="${STAR_VLA_PYTHON:-python}"
+LIBERO_PYTHON="${LIBERO_PYTHON:-python}"
 
 # Default checkpoint (override by arg $1 or YOUR_CKPT).
-DEFAULT_CKPT_PATH="${DEFAULT_CKPT_PATH:-/share/project/lvjing/starVLA/results/LiberoECOT_final/libero_all_DITB_LR1E-4_LR1E-5_BTS14_40K_1lr/checkpoints/steps_24000_pytorch_model.pt}"
+DEFAULT_CKPT_PATH="${DEFAULT_CKPT_PATH:-}"
 
 require_python() {
   local label="$1"
@@ -23,7 +22,7 @@ require_python() {
   if command -v "${value}" >/dev/null 2>&1; then
     return 0
   fi
-  echo "❌ ${label} 不可用: ${value}" >&2
+  echo "❌ ${label} is not available: ${value}" >&2
   return 1
 }
 
@@ -32,20 +31,20 @@ require_python "LIBERO_PYTHON" "${LIBERO_PYTHON}"
 
 CKPT_PATH="${1:-${YOUR_CKPT:-${DEFAULT_CKPT_PATH:-}}}"
 if [[ -z "${CKPT_PATH}" ]]; then
-  echo "❌ 请提供 checkpoint 路径（建议绝对路径），例如："
-  echo "   YOUR_CKPT=/share/.../steps_15000_pytorch_model.pt bash $0"
-  echo "或在脚本/环境变量里设置 DEFAULT_CKPT_PATH"
+  echo "❌ Please provide a checkpoint path, preferably absolute. Example:"
+  echo "   YOUR_CKPT=/abs/path/to/steps_15000_pytorch_model.pt bash $0"
+  echo "Or set DEFAULT_CKPT_PATH in the script or environment."
   exit 1
 fi
 if [[ ! -f "${CKPT_PATH}" ]]; then
-  echo "❌ 找不到模型文件: ${CKPT_PATH}"
+  echo "❌ Checkpoint file not found: ${CKPT_PATH}"
   exit 1
 fi
 
 TASK_SUITES="${TASK_SUITES:-libero_goal,libero_spatial,libero_object,libero_10}"
 IFS=',' read -r -a SUITES <<< "${TASK_SUITES}"
 if [[ "${#SUITES[@]}" -eq 0 ]]; then
-  echo "❌ TASK_SUITES 为空"
+  echo "❌ TASK_SUITES is empty"
   exit 1
 fi
 
@@ -60,8 +59,17 @@ fi
 IFS=',' read -r -a CUDA_DEVICES <<< "${CUDA_VISIBLE_DEVICES}"
 NUM_GPUS="${#CUDA_DEVICES[@]}"
 
-export LIBERO_HOME="${LIBERO_HOME:-/share/project/baishuanghao/code/LIBERO}"
-export LIBERO_CONFIG_PATH="${LIBERO_HOME}/libero"
+LIBERO_HOME="${LIBERO_HOME:-}"
+if [[ -z "${LIBERO_HOME}" ]]; then
+  echo "❌ Please set LIBERO_HOME, for example: LIBERO_HOME=/abs/path/to/LIBERO" >&2
+  exit 1
+fi
+if [[ ! -d "${LIBERO_HOME}" ]]; then
+  echo "❌ LIBERO_HOME does not exist: ${LIBERO_HOME}" >&2
+  exit 1
+fi
+export LIBERO_HOME
+export LIBERO_CONFIG_PATH="${LIBERO_CONFIG_PATH:-${LIBERO_HOME}/libero}"
 
 EVAL_PYTHONPATH="${REPO_ROOT}:${LIBERO_HOME}"
 if [[ -n "${PYTHONPATH:-}" ]]; then
@@ -82,7 +90,7 @@ if [[ "${SAVE_VIDEOS}" == "true" ]]; then
 fi
 
 echo "======================================================"
-echo "📊 LIBERO 并行评测（implicit latent reasoning）"
+echo "📊 LIBERO Parallel Evaluation (implicit latent reasoning)"
 echo "------------------------------------------------------"
 echo "Checkpoint : ${CKPT_PATH}"
 echo "Suites     : ${SUITES[*]}"
@@ -106,7 +114,7 @@ cleanup_port() {
     stale_pids="$(ps aux | grep "deployment/model_server/server_policy.py" | grep "--port ${port}" | grep -v grep | awk '{print $2}' || true)"
   fi
   if [[ -n "${stale_pids}" ]]; then
-    echo "🧹 清理端口 ${port} 上的旧 server: ${stale_pids}"
+    echo "🧹 Cleaning up stale server processes on port ${port}: ${stale_pids}"
     kill ${stale_pids} 2>/dev/null || true
     sleep 2
     kill -9 ${stale_pids} 2>/dev/null || true
@@ -138,7 +146,7 @@ trap cleanup EXIT
 
 wait_port_ready() {
   local port="$1"
-  echo "⏳ 等待 server 就绪: 127.0.0.1:${port}"
+  echo "⏳ Waiting for server to become ready: 127.0.0.1:${port}"
   "${STAR_VLA_PYTHON}" - <<PY
 import os
 import sys
@@ -189,7 +197,7 @@ start_server() {
   local port="$2"
   local log_file="${SERVER_LOG_DIR}/server_${port}.log"
   cleanup_port "${port}"
-  echo "▶️  启动 server: GPU=${gpu_id} port=${port} log=${log_file}"
+  echo "▶️  Starting server: GPU=${gpu_id} port=${port} log=${log_file}"
   CUDA_VISIBLE_DEVICES="${gpu_id}" "${STAR_VLA_PYTHON}" deployment/model_server/server_policy.py \
     --ckpt_path "${CKPT_PATH}" \
     --port "${port}" \
@@ -206,7 +214,7 @@ run_suite_eval() {
   local stdout_log="${LOG_DIR}/${suite}.stdout.log"
 
   mkdir -p "${suite_video_dir}"
-  echo "🧪 启动评测: suite=${suite} port=${port} stdout_log=${stdout_log}"
+  echo "🧪 Starting evaluation: suite=${suite} port=${port} stdout_log=${stdout_log}"
   LIBERO_HOME="${LIBERO_HOME}" \
   LIBERO_CONFIG_PATH="${LIBERO_CONFIG_PATH}" \
   PYTHONPATH="${EVAL_PYTHONPATH}" \
@@ -234,11 +242,11 @@ for idx in "${!SUITES[@]}"; do
 done
 
 if (( NUM_GPUS < ${#SUITES[@]} )); then
-  echo "⚠️  当前 GPU 池只有 ${NUM_GPUS} 张卡，但 suite 数为 ${#SUITES[@]}，将会在同一张 GPU 上启动多个 server，可能导致 OOM/变慢。"
+  echo "⚠️  The GPU pool has only ${NUM_GPUS} devices, but there are ${#SUITES[@]} suites. Multiple servers will share GPUs, which may cause OOM or slowdowns."
 fi
 
 echo ""
-echo "⏳ 等待所有 servers 就绪..."
+echo "⏳ Waiting for all servers to become ready..."
 for idx in "${!SUITES[@]}"; do
   port=$((BASE_PORT + idx))
   wait_port_ready "${port}"
@@ -251,10 +259,10 @@ for idx in "${!SUITES[@]}"; do
 done
 
 echo ""
-echo "🚀 已启动 ${#server_pids[@]} 个 server + ${#eval_pids[@]} 个 eval，等待完成..."
+echo "🚀 Started ${#server_pids[@]} servers and ${#eval_pids[@]} eval jobs. Waiting for completion..."
 for pid in "${eval_pids[@]}"; do
   wait "${pid}"
 done
 
 echo ""
-echo "✅ LIBERO 并行评测完成：${EVAL_DIR}"
+echo "✅ LIBERO parallel evaluation complete: ${EVAL_DIR}"

@@ -9,14 +9,14 @@ run_id: "libero_all"
 run_root_dir: "results/LiberoAll"
 seed: 42
 trackers: [jsonl, wandb]
-wandb_entity: "lvj2114-beijing-academy-of-artificial-intelligence"
+wandb_entity: ""
 wandb_project: "libero_all"
 is_debug: false
 
 datasets:
   vla_data:
     dataset_py: "lerobot_datasets"
-    data_root_dir: "/share/project/baishuanghao/data/libero_lerobot"
+    data_root_dir: "./data/libero_lerobot"
     data_mix: "libero_all"
     per_device_batch_size: 8
     image_size: [224, 224]
@@ -71,7 +71,7 @@ framework:
   qwenvl:
     base_vlm: "StarVLA/Qwen3-VL-4B-Instruct-Action"
     attn_implementation: "sdpa"
-    cache_dir: "/share/project/lvjing/starVLA/qwen_cache"
+    cache_dir: "./qwen_cache"
     model_max_length: 2048
 
   action_model:

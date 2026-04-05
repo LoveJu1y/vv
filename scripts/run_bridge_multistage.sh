@@ -12,23 +12,24 @@
 # ============================================================================
 set -euo pipefail
 
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+REPO_ROOT="$(cd "${SCRIPT_DIR}/.." && pwd)"
+cd "${REPO_ROOT}"
+
 # ----------------------------------------------------------------------------
 # Environment
 # ----------------------------------------------------------------------------
-export HF_ENDPOINT="${HF_ENDPOINT:-https://hf-mirror.com}"
-export HF_HOME="${HF_HOME:-/share/project/lvjing/starVLA/qwen_cache}"
-export WANDB_API_KEY="${WANDB_API_KEY:-a8989c35c0573184da807b8a781d72936fe7e379}"
-export WANDB_BASE_URL="${WANDB_BASE_URL:-https://api.bandw.top}"
 export TOKENIZERS_PARALLELISM="${TOKENIZERS_PARALLELISM:-false}"
+export HF_HOME="${HF_HOME:-${REPO_ROOT}/qwen_cache}"
 
 # ----------------------------------------------------------------------------
 # Base configuration
 # ----------------------------------------------------------------------------
-CONFIG_PATH="${CONFIG_PATH:-../starVLA/config/training/bridge_lerobot_stage2.yaml}"
+CONFIG_PATH="${CONFIG_PATH:-starVLA/config/training/bridge_lerobot_stage2.yaml}"
 RUN_ROOT_DIR="${RUN_ROOT_DIR:-results/BridgeLeRobot_VLM_Final_SDPA5}"
 RUN_ID_PREFIX="${RUN_ID_PREFIX:-bridge_multistage}"
 WANDB_PROJECT="${WANDB_PROJECT:-bridge_multistage_vlm_final_sdpa5}"
-WANDB_ENTITY="${WANDB_ENTITY:-lvj2114-beijing-academy-of-artificial-intelligence}"
+WANDB_ENTITY="${WANDB_ENTITY:-}"
 NUM_GPUS="${NUM_GPUS:-8}"
 MASTER_PORT="${MASTER_PORT:-29512}"
 
@@ -115,11 +116,8 @@ declare -A STAGE_CHECKPOINT_EXPORT=(
 # ----------------------------------------------------------------------------
 default_steps_cache_for_stage() {
   local scheduled_stage="$1"
-  if (( scheduled_stage <= 3 )); then
-    echo "/share/project/baishuanghao/data/bridge_orig_lerobot/meta/steps_9f926a41b0ba.pkl"
-  else
-    echo "/share/project/baishuanghao/data/bridge_orig_lerobot/meta/steps_45cc68a6124a.pkl"
-  fi
+  : "${scheduled_stage}"
+  echo ""
 }
 
 ensure_output_dir() {
@@ -173,7 +171,6 @@ run_stage() {
     --datasets.vla_data.ecot.scheduled_stage "${scheduled_stage}"
     --datasets.vla_data.bridge_reasoning.include_action_tokens "true"
     --datasets.vla_data.bridge_reasoning.component_order "${component_order}"
-    --datasets.vla_data.bridge_annotations.steps_cache_path "${steps_cache_path}"
     --framework.action_model.use_reasoning_film "${USE_REASONING_FILM}"
     --framework.action_model.reasoning_film_first_k "${REASONING_FILM_FIRST_K}"
     --framework.action_model.reasoning_film_dropout "${REASONING_FILM_DROPOUT}"
@@ -187,6 +184,10 @@ run_stage() {
     --framework.img_next.loss_weight "${img_next_loss_weight}"
     --framework.qwenvl.attn_implementation "${attention_implementation}"
   )
+
+  if [[ -n "${steps_cache_path}" ]]; then
+    TRAIN_CONFIG_ARGS+=( --datasets.vla_data.bridge_annotations.steps_cache_path "${steps_cache_path}" )
+  fi
 
   if [[ -n "${prev_ckpt}" ]]; then
     echo "Loading checkpoint: ${prev_ckpt}"
@@ -205,9 +206,12 @@ run_stage() {
     --run_root_dir "${RUN_ROOT_DIR}"
     --run_id "${run_id}"
     --wandb_project "${WANDB_PROJECT}"
-    --wandb_entity "${WANDB_ENTITY}"
     "${TRAIN_CONFIG_ARGS[@]}"
   )
+
+  if [[ -n "${WANDB_ENTITY}" ]]; then
+    cmd+=( --wandb_entity "${WANDB_ENTITY}" )
+  fi
 
   echo "Command:"
   printf '  %q' "${cmd[@]}"

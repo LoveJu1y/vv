@@ -1,23 +1,22 @@
 #!/usr/bin/env bash
 
 set -euo pipefail
-export HF_ENDPOINT=https://hf-mirror.com
-export HF_HOME=/share/project/lvjing/starVLA/qwen_cache
-# 与 eval_libero_all.sh 一致：用 OSMesa 避免 EGL 报错
-# export MUJOCO_GL="${MUJOCO_GL:-osmesa}"
-CKPT_DIR="${1:-/share/project/lvjing/starVLA/results/LiberoECOT_final/libero_all_DITB_LR1E-4_LR1E-5_BTS14_40K_1lr/checkpoints}"
-MIN_STEP_ARG="${2:-}"
-
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_ROOT="$(cd "${SCRIPT_DIR}/../.." && pwd)"
 cd "${REPO_ROOT}" || exit 1
+export HF_HOME="${HF_HOME:-${REPO_ROOT}/qwen_cache}"
+# Match eval_libero_all.sh: use OSMesa to avoid EGL issues when needed.
+# export MUJOCO_GL="${MUJOCO_GL:-osmesa}"
+DEFAULT_CKPT_DIR="${DEFAULT_CKPT_DIR:-}"
+CKPT_DIR="${1:-${YOUR_CKPT_DIR:-${DEFAULT_CKPT_DIR:-}}}"
+MIN_STEP_ARG="${2:-}"
 
 if [[ -z "${CKPT_DIR}" ]]; then
-  echo "❌ 请提供 checkpoints 目录，例如：bash $0 /share/.../checkpoints [MIN_STEP]" >&2
+  echo "❌ Please provide a checkpoints directory, for example: bash $0 /abs/path/to/checkpoints [MIN_STEP]" >&2
   exit 1
 fi
 if [[ ! -d "${CKPT_DIR}" ]]; then
-  echo "❌ checkpoint 目录不存在: ${CKPT_DIR}" >&2
+  echo "❌ Checkpoint directory does not exist: ${CKPT_DIR}" >&2
   exit 1
 fi
 
@@ -27,11 +26,11 @@ if [[ -n "${MIN_STEP_ARG}" ]]; then
   MIN_STEP="${MIN_STEP_ARG}"
 fi
 if [[ -n "${MIN_STEP}" ]] && ! [[ "${MIN_STEP}" =~ ^[0-9]+$ ]]; then
-  echo "❌ MIN_STEP 必须是非负整数，当前为: ${MIN_STEP}" >&2
+  echo "❌ MIN_STEP must be a non-negative integer. Got: ${MIN_STEP}" >&2
   exit 1
 fi
 if [[ -n "${MAX_STEP}" ]] && ! [[ "${MAX_STEP}" =~ ^[0-9]+$ ]]; then
-  echo "❌ MAX_STEP 必须是非负整数（或留空），当前为: ${MAX_STEP}" >&2
+  echo "❌ MAX_STEP must be a non-negative integer or empty. Got: ${MAX_STEP}" >&2
   exit 1
 fi
 
@@ -41,11 +40,11 @@ SAVE_VIDEOS="${SAVE_VIDEOS:-false}"
 STOP_ON_FAIL="${STOP_ON_FAIL:-false}"
 
 if ! [[ "${BASE_PORT}" =~ ^[0-9]+$ ]]; then
-  echo "❌ BASE_PORT 必须是非负整数，当前为: ${BASE_PORT}" >&2
+  echo "❌ BASE_PORT must be a non-negative integer. Got: ${BASE_PORT}" >&2
   exit 1
 fi
 if ! [[ "${PORT_STRIDE}" =~ ^[0-9]+$ ]]; then
-  echo "❌ PORT_STRIDE 必须是非负整数，当前为: ${PORT_STRIDE}" >&2
+  echo "❌ PORT_STRIDE must be a non-negative integer. Got: ${PORT_STRIDE}" >&2
   exit 1
 fi
 
@@ -62,7 +61,7 @@ echo "======================================================"
 shopt -s nullglob
 mapfile -t CKPTS < <(printf '%s\n' "${CKPT_DIR}"/steps_*_pytorch_model.pt | sort -V)
 if (( ${#CKPTS[@]} == 0 )); then
-  echo "❌ 未找到 steps_*_pytorch_model.pt 文件: ${CKPT_DIR}" >&2
+  echo "❌ No steps_*_pytorch_model.pt files found in: ${CKPT_DIR}" >&2
   exit 1
 fi
 
@@ -79,12 +78,12 @@ for ckpt in "${CKPTS[@]}"; do
     fi
     FILTERED_CKPTS+=("${ckpt}")
   else
-    echo "⚠️ 跳过非标准命名 ckpt: ${ckpt}" >&2
+    echo "⚠️ Skipping checkpoint with non-standard name: ${ckpt}" >&2
   fi
 done
 
 if (( ${#FILTERED_CKPTS[@]} == 0 )); then
-  echo "❌ 未找到满足 step 范围的 ckpt（MIN_STEP=${MIN_STEP}, MAX_STEP=${MAX_STEP:-<unset>}）" >&2
+  echo "❌ No checkpoints found within the requested step range (MIN_STEP=${MIN_STEP}, MAX_STEP=${MAX_STEP:-<unset>})" >&2
   exit 1
 fi
 
@@ -110,4 +109,4 @@ for ckpt in "${FILTERED_CKPTS[@]}"; do
   idx=$((idx + 1))
 done
 
-echo "✅ 所有 checkpoints 测评完成：${CKPT_DIR}"
+echo "✅ All checkpoint evaluations completed: ${CKPT_DIR}"
