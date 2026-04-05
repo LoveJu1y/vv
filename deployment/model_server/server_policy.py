@@ -6,7 +6,7 @@ import logging
 import socket
 import argparse
 from deployment.model_server.tools.websocket_policy_server import WebsocketPolicyServer
-from starVLA.model.framework.base_framework import baseframework
+from laravla.model.framework.base_framework import baseframework
 import torch, os
 
 

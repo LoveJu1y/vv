@@ -8,14 +8,14 @@
 ## Phase 1：配置文件精简（3 个 yaml）
 
 > 风险等级：🟢 低（不改代码逻辑，代码中均有 `getattr` / `.get` 默认值兜底）
-> 验证方式：`python -c "from omegaconf import OmegaConf; c = OmegaConf.load('starVLA/config/training/libero_all_ecot_stage4.yaml'); print(c)"` 确认 yaml 语法正确
+> 验证方式：`python -c "from omegaconf import OmegaConf; c = OmegaConf.load('laravla/config/training/libero_all_ecot_stage4.yaml'); print(c)"` 确认 yaml 语法正确
 
 ### Step 1.1 — 删除 `datasets.vla_data.ecot` 整个节点
 
 **涉及文件（3 个）：**
-- `starVLA/config/training/libero_all_ecot_stage4.yaml`（L62-63）
-- `starVLA/config/training/libero_goal_ecot_stage4.yaml`（L74-75）
-- `starVLA/config/training/bridge_lerobot_stage2.yaml`（L53-54）
+- `laravla/config/training/libero_all_ecot_stage4.yaml`（L62-63）
+- `laravla/config/training/libero_goal_ecot_stage4.yaml`（L74-75）
+- `laravla/config/training/bridge_lerobot_stage2.yaml`（L53-54）
 
 **操作：** 删除以下内容（每个文件中）：
 ```yaml
@@ -30,8 +30,8 @@
 ### Step 1.2 — 删除 `framework.enable_latent_reasoning` 和 `framework.emit_thinking_tokens`
 
 **涉及文件（2 个）：**
-- `starVLA/config/training/libero_all_ecot_stage4.yaml`（L69-71，含注释）
-- `starVLA/config/training/bridge_lerobot_stage2.yaml`（L60-61）
+- `laravla/config/training/libero_all_ecot_stage4.yaml`（L69-71，含注释）
+- `laravla/config/training/bridge_lerobot_stage2.yaml`（L60-61）
 
 **操作：** 删除以下行：
 ```yaml
@@ -49,8 +49,8 @@
 ### Step 1.3 — 删除 `framework.latent_reasoning` 中的 3 个 token 定义
 
 **涉及文件（2 个）：**
-- `starVLA/config/training/libero_all_ecot_stage4.yaml`（L72-77）
-- `starVLA/config/training/bridge_lerobot_stage2.yaml`（L62-67）
+- `laravla/config/training/libero_all_ecot_stage4.yaml`（L72-77）
+- `laravla/config/training/bridge_lerobot_stage2.yaml`（L62-67）
 
 **操作：** 将 `framework.latent_reasoning` 从：
 ```yaml
@@ -75,8 +75,8 @@
 ### Step 1.4 — 删除 `bridge_reasoning.vlm_loss_weight`
 
 **涉及文件（2 个）：**
-- `starVLA/config/training/libero_all_ecot_stage4.yaml`（L60）
-- `starVLA/config/training/bridge_lerobot_stage2.yaml`（L52）
+- `laravla/config/training/libero_all_ecot_stage4.yaml`（L60）
+- `laravla/config/training/bridge_lerobot_stage2.yaml`（L52）
 
 **操作：** 删除 `bridge_reasoning` 节点下的：
 ```yaml
@@ -92,8 +92,8 @@
 ### Step 1.5 — 删除 `action_model` 中 9 个未使用的字段
 
 **涉及文件（2 个）：**
-- `starVLA/config/training/libero_all_ecot_stage4.yaml`（L109-118）
-- `starVLA/config/training/bridge_lerobot_stage2.yaml`（L97-105）
+- `laravla/config/training/libero_all_ecot_stage4.yaml`（L109-118）
+- `laravla/config/training/bridge_lerobot_stage2.yaml`（L97-105）
 
 **操作：** 删除以下 9 行（含注释行）：
 ```yaml
@@ -118,9 +118,9 @@
 ### Step 1.6 — 处理 `steps_cache_path` 和 `write_steps_cache`
 
 **涉及文件（3 个）：**
-- `starVLA/config/training/libero_all_ecot_stage4.yaml`（L35-37）
-- `starVLA/config/training/libero_goal_ecot_stage4.yaml`（L48-49）
-- `starVLA/config/training/bridge_lerobot_stage2.yaml`（L31）
+- `laravla/config/training/libero_all_ecot_stage4.yaml`（L35-37）
+- `laravla/config/training/libero_goal_ecot_stage4.yaml`（L48-49）
+- `laravla/config/training/bridge_lerobot_stage2.yaml`（L31）
 
 **操作：** 将硬编码绝对路径改为 `null`：
 ```yaml
@@ -137,7 +137,7 @@
 ### Step 1.7 — 删除 `bridge_lerobot_stage2.yaml` 中的 `trainer.latent_analysis` 块
 
 **涉及文件（1 个）：**
-- `starVLA/config/training/bridge_lerobot_stage2.yaml`（L124-146）
+- `laravla/config/training/bridge_lerobot_stage2.yaml`（L124-146）
 
 **操作：** 删除整个 `latent_analysis` 子节点（约 23 行）：
 ```yaml
@@ -155,7 +155,7 @@
 ### Step 1.8 — 保留 `bridge_lerobot_stage2.yaml` 中经过验证的 `exclude_task_indices` 列表
 
 **涉及文件（1 个）：**
-- `starVLA/config/training/bridge_lerobot_stage2.yaml`（L38）
+- `laravla/config/training/bridge_lerobot_stage2.yaml`（L38）
 
 **操作：** 保留以下配置：
 ```yaml
@@ -170,9 +170,9 @@
 
 ```bash
 # 逐个验证 yaml 语法
-python -c "from omegaconf import OmegaConf; c = OmegaConf.load('starVLA/config/training/libero_all_ecot_stage4.yaml'); print('OK')"
-python -c "from omegaconf import OmegaConf; c = OmegaConf.load('starVLA/config/training/libero_goal_ecot_stage4.yaml'); print('OK')"
-python -c "from omegaconf import OmegaConf; c = OmegaConf.load('starVLA/config/training/bridge_lerobot_stage2.yaml'); print('OK')"
+python -c "from omegaconf import OmegaConf; c = OmegaConf.load('laravla/config/training/libero_all_ecot_stage4.yaml'); print('OK')"
+python -c "from omegaconf import OmegaConf; c = OmegaConf.load('laravla/config/training/libero_goal_ecot_stage4.yaml'); print('OK')"
+python -c "from omegaconf import OmegaConf; c = OmegaConf.load('laravla/config/training/bridge_lerobot_stage2.yaml'); print('OK')"
 ```
 
 ---
@@ -180,11 +180,11 @@ python -c "from omegaconf import OmegaConf; c = OmegaConf.load('starVLA/config/t
 ## Phase 2：删除死代码（不改逻辑）
 
 > 风险等级：🟢 低（只删除不可达 / 未调用的代码）
-> 验证方式：`python -c "from starVLA.training.train import main"` 确认 import 不报错
+> 验证方式：`python -c "from laravla.training.train import main"` 确认 import 不报错
 
 ### Step 2.1 — 删除 `train.py` 中的 `load_fast_tokenizer()`
 
-**涉及文件：** `starVLA/training/train.py`（L65-67）
+**涉及文件：** `laravla/training/train.py`（L65-67）
 
 **操作：** 删除：
 ```python
@@ -201,7 +201,7 @@ def load_fast_tokenizer():
 
 ### Step 2.2 — 删除 `train.py` 中的 debugpy 代码
 
-**涉及文件：** `starVLA/training/train.py`（L740-745）
+**涉及文件：** `laravla/training/train.py`（L740-745）
 
 **操作：** 删除：
 ```python
@@ -219,7 +219,7 @@ def load_fast_tokenizer():
 
 ### Step 2.3 — 删除 `QwenGR00T.py` 中 `__main__` 块的 debugpy
 
-**涉及文件：** `starVLA/model/framework/QwenGR00T.py`（L1033, L1039-1041）
+**涉及文件：** `laravla/model/framework/QwenGR00T.py`（L1033, L1039-1041）
 
 **操作：** 删除 `if __name__ == "__main__"` 块中的：
 ```python
@@ -237,8 +237,8 @@ def load_fast_tokenizer():
 ### Step 2.4 — 删除 `QwenGR00T.py` 中的 `DEBUG_THINKING_ATTN` 相关代码
 
 **涉及文件（2 个）：**
-- `starVLA/model/framework/QwenGR00T.py`（L993-1002, L1009）
-- `starVLA/model/modules/action_model/flow_matching_head/cross_attention_dit.py`（L30, L179, L337, L365）
+- `laravla/model/framework/QwenGR00T.py`（L993-1002, L1009）
+- `laravla/model/modules/action_model/flow_matching_head/cross_attention_dit.py`（L30, L179, L337, L365）
 
 **操作 A — `QwenGR00T.py`：**
 
@@ -248,7 +248,7 @@ def load_fast_tokenizer():
             try:
                 cache = self.action_model.model.get_and_clear_thinking_attn_cache()
                 if cache:
-                    out_dir = "/share/project/lvjing/starVLA/results/ANALY"
+                    out_dir = "/share/project/lvjing/laravla/results/ANALY"
                     os.makedirs(out_dir, exist_ok=True)
                     out_path = os.path.join(out_dir, "thinking_attn_cache.pt")
                     torch.save(cache, out_path)
@@ -272,7 +272,7 @@ def load_fast_tokenizer():
 
 3. 删除顶部的 import（L34）：
 ```python
-from starVLA.model.modules.action_model.flow_matching_head import cross_attention_dit as dit_debug
+from laravla.model.modules.action_model.flow_matching_head import cross_attention_dit as dit_debug
 ```
 
 **操作 B — `cross_attention_dit.py`：**
@@ -285,7 +285,7 @@ from starVLA.model.modules.action_model.flow_matching_head import cross_attentio
 
 ### Step 2.5 — 删除 `QwenGR00T.py` 中 `__main__` 块末尾的注释掉的代码
 
-**涉及文件：** `starVLA/model/framework/QwenGR00T.py`（L1074-1107）
+**涉及文件：** `laravla/model/framework/QwenGR00T.py`（L1074-1107）
 
 **操作：** 删除所有被 `# #` 注释掉的 dataloader 测试代码块。
 
@@ -297,8 +297,8 @@ from starVLA.model.modules.action_model.flow_matching_head import cross_attentio
 
 ```bash
 # 确认 import 链不报错
-python -c "from starVLA.model.framework.QwenGR00T import Qwen_GR00T; print('OK')"
-python -c "from starVLA.training.train import main; print('OK')"
+python -c "from laravla.model.framework.QwenGR00T import Qwen_GR00T; print('OK')"
+python -c "from laravla.training.train import main; print('OK')"
 ```
 
 ---
@@ -310,7 +310,7 @@ python -c "from starVLA.training.train import main; print('OK')"
 
 ### Step 3.1 — 精简 `cot_mode_utils.py`
 
-**涉及文件：** `starVLA/training/trainer_utils/cot_mode_utils.py`
+**涉及文件：** `laravla/training/trainer_utils/cot_mode_utils.py`
 
 **操作：** 将整个文件重写为：
 
@@ -337,17 +337,17 @@ def get_implicit_flags() -> dict:
 
 ### Step 3.2 — 精简 `train.py` 的 `main()` 函数
 
-**涉及文件：** `starVLA/training/train.py`
+**涉及文件：** `laravla/training/train.py`
 
 **操作 A — 修改 import：**
 
 将：
 ```python
-from starVLA.training.trainer_utils.cot_mode_utils import parse_cot_mode, derive_flags_from_mode
+from laravla.training.trainer_utils.cot_mode_utils import parse_cot_mode, derive_flags_from_mode
 ```
 改为：
 ```python
-from starVLA.training.trainer_utils.cot_mode_utils import get_implicit_flags
+from laravla.training.trainer_utils.cot_mode_utils import get_implicit_flags
 ```
 
 **操作 B — 重写 `main()` 开头（L668-692）：**
@@ -406,7 +406,7 @@ def main(cfg) -> None:
 
 ### Step 3.3 — 精简 `sync_bridge_reasoning_to_framework()`
 
-**涉及文件：** `starVLA/training/train.py`（L256-314）
+**涉及文件：** `laravla/training/train.py`（L256-314）
 
 **操作：** 重写为：
 
@@ -459,7 +459,7 @@ def sync_bridge_reasoning_to_framework(cfg):
 
 ### Step 3.4 — 精简 `validate_ecot_config()`
 
-**涉及文件：** `starVLA/training/train.py`（L182-253）
+**涉及文件：** `laravla/training/train.py`（L182-253）
 
 **操作：** 重写为：
 
@@ -498,7 +498,7 @@ def validate_ecot_config(cfg):
 
 ### Step 3.5 — 精简 `prepare_data()` 中的 `data_mix` fallback
 
-**涉及文件：** `starVLA/training/train.py`（L110-127）
+**涉及文件：** `laravla/training/train.py`（L110-127）
 
 **操作：** 将：
 ```python
@@ -523,7 +523,7 @@ def validate_ecot_config(cfg):
 
 ### Step 3.6 — 精简 `_log_training_config()` 中的 `scheduled_stage` 读取
 
-**涉及文件：** `starVLA/training/train.py`（L562-591）
+**涉及文件：** `laravla/training/train.py`（L562-591）
 
 **操作：** 将 `scheduled_stage` 的读取从：
 ```python
@@ -550,12 +550,12 @@ def validate_ecot_config(cfg):
 
 ```bash
 # 1. 确认 import 链正常
-python -c "from starVLA.training.train import main; print('OK')"
+python -c "from laravla.training.train import main; print('OK')"
 
 # 2. 用 1 GPU 跑 10 步（dry-run）
 accelerate launch --num_processes 1 \
-  starVLA/training/train.py \
-  --config_yaml starVLA/config/training/libero_all_ecot_stage4.yaml \
+  laravla/training/train.py \
+  --config_yaml laravla/config/training/libero_all_ecot_stage4.yaml \
   --trainer.max_train_steps 10 \
   --trainer.save_interval 100 \
   --trainer.eval_interval 100
@@ -566,11 +566,11 @@ accelerate launch --num_processes 1 \
 ## Phase 4：精简 QwenGR00T.py 模型代码
 
 > 风险等级：🟡 中（修改 forward/predict 逻辑）
-> 验证方式：`python starVLA/model/framework/QwenGR00T.py` smoke test + 实际训练 10 步
+> 验证方式：`python laravla/model/framework/QwenGR00T.py` smoke test + 实际训练 10 步
 
 ### Step 4.1 — 删除 `forward()` 中的 explicit 分支
 
-**涉及文件：** `starVLA/model/framework/QwenGR00T.py`
+**涉及文件：** `laravla/model/framework/QwenGR00T.py`
 
 **操作：** 在 `forward()` 方法中（约 L129-139），删除：
 ```python
@@ -593,7 +593,7 @@ accelerate launch --num_processes 1 \
 
 ### Step 4.2 — 删除 `predict_action()` 中的 explicit 分支
 
-**涉及文件：** `starVLA/model/framework/QwenGR00T.py`
+**涉及文件：** `laravla/model/framework/QwenGR00T.py`
 
 **操作：** 在 `predict_action()` 方法中（约 L900-951），删除：
 ```python
@@ -622,14 +622,14 @@ accelerate launch --num_processes 1 \
 
 ### Step 4.3 — 移出 `_maybe_log_latent_analysis()` 到独立文件
 
-**涉及文件：** `starVLA/model/framework/QwenGR00T.py`（L341-721，约 380 行）
+**涉及文件：** `laravla/model/framework/QwenGR00T.py`（L341-721，约 380 行）
 
 **操作：**
-1. 创建 `starVLA/model/framework/latent_analysis.py`
+1. 创建 `laravla/model/framework/latent_analysis.py`
 2. 将 `_get_latent_analysis_cfg()` 和 `_maybe_log_latent_analysis()` 移入
 3. 在 `QwenGR00T.py` 中改为：
 ```python
-from starVLA.model.framework.latent_analysis import maybe_log_latent_analysis
+from laravla.model.framework.latent_analysis import maybe_log_latent_analysis
 
 # 在 forward() 中调用处改为：
 maybe_log_latent_analysis(self, qwen_inputs=..., last_hidden=..., ...)
@@ -643,7 +643,7 @@ maybe_log_latent_analysis(self, qwen_inputs=..., last_hidden=..., ...)
 
 ### Step 4.4 — 删除 `QwenGR00T.py` 中 `__main__` 块末尾注释代码
 
-**涉及文件：** `starVLA/model/framework/QwenGR00T.py`（L1074-1107）
+**涉及文件：** `laravla/model/framework/QwenGR00T.py`（L1074-1107）
 
 **操作：** 删除所有 `# #` 注释掉的 dataloader 测试代码。
 
@@ -653,12 +653,12 @@ maybe_log_latent_analysis(self, qwen_inputs=..., last_hidden=..., ...)
 
 ```bash
 # 1. smoke test
-python starVLA/model/framework/QwenGR00T.py --config_yaml starVLA/config/training/libero_all_ecot_stage4.yaml
+python laravla/model/framework/QwenGR00T.py --config_yaml laravla/config/training/libero_all_ecot_stage4.yaml
 
 # 2. 实际训练 10 步
 accelerate launch --num_processes 1 \
-  starVLA/training/train.py \
-  --config_yaml starVLA/config/training/libero_all_ecot_stage4.yaml \
+  laravla/training/train.py \
+  --config_yaml laravla/config/training/libero_all_ecot_stage4.yaml \
   --trainer.max_train_steps 10
 ```
 
@@ -671,7 +671,7 @@ accelerate launch --num_processes 1 \
 
 ### Step 5.1 — 清理 `cross_attention_dit.py`
 
-**涉及文件：** `starVLA/model/modules/action_model/flow_matching_head/cross_attention_dit.py`
+**涉及文件：** `laravla/model/modules/action_model/flow_matching_head/cross_attention_dit.py`
 
 **操作：**
 1. 删除 `DEBUG_THINKING_ATTN = False`（L30）
@@ -688,7 +688,7 @@ accelerate launch --num_processes 1 \
 
 ### Step 6.1 — 在 `gr00t_lerobot/datasets.py` 中添加 null 兜底
 
-**涉及文件：** `starVLA/dataloader/gr00t_lerobot/datasets.py`
+**涉及文件：** `laravla/dataloader/gr00t_lerobot/datasets.py`
 
 **操作：** 找到读取 `steps_cache_path` 的位置，确保当值为 `null/None` 时：
 - 要么自动推导路径（如 `{data_root_dir}/.cache/steps_{hash}.pkl`）

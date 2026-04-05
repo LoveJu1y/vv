@@ -12,7 +12,7 @@ from typing import Dict
 import numpy as np
 from pathlib import Path
 
-from starVLA.model.tools import read_mode_config
+from laravla.model.tools import read_mode_config
 
 
 class M1Inference:

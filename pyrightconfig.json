@@ -9,6 +9,7 @@
       "scripts/debug",
       "eval/debug_logs",
       "playground",
+      "LaRA_VLA.egg-info",
       "cogact.egg-info",
       "eval",
       "example",

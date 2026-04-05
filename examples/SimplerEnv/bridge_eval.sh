@@ -17,7 +17,7 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_ROOT="$(cd "${SCRIPT_DIR}/../.." && pwd)"
 cd "${REPO_ROOT}"
 
-star_vla_python="${star_vla_python:-python}"
+laravla_python="${laravla_python:-python}"
 sim_python="${sim_python:-python}"
 SimplerEnv_PATH="${SimplerEnv_PATH:-}"
 export PYTHONPATH="${REPO_ROOT}:${PYTHONPATH:-}"
@@ -36,7 +36,7 @@ require_python() {
   exit 1
 }
 
-require_python "star_vla_python" "${star_vla_python}"
+require_python "laravla_python" "${laravla_python}"
 require_python "sim_python" "${sim_python}"
 
 if [[ -z "${SimplerEnv_PATH}" ]]; then
@@ -116,7 +116,7 @@ start_server() {
 
   cleanup_port "${port}"
   echo "▶️  Starting policy server (GPU ${gpu_id}, port ${port})"
-  CUDA_VISIBLE_DEVICES="${gpu_id}" "${star_vla_python}" deployment/model_server/server_policy.py \
+  CUDA_VISIBLE_DEVICES="${gpu_id}" "${laravla_python}" deployment/model_server/server_policy.py \
     --ckpt_path "${CKPT_PATH}" \
     --port "${port}" \
     --use_bf16 \

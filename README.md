@@ -17,10 +17,10 @@ This open-source release currently includes:
 
 ## Method Overview
 
-LaRA-VLA is a latent-reasoning VLA project built on top of the open-source
-StarVLA codebase. In this repository, the project identity is **LaRA-VLA**,
-while the implementation namespace remains `starVLA/` because the codebase is
-developed from that upstream base.
+LaRA-VLA is a latent-reasoning VLA project for vision-language-action policy
+learning. The public project identity of this repository is **LaRA-VLA**.
+
+The active code namespace in this repository is now `laravla/`.
 
 The current focus of LaRA-VLA is **implicit latent reasoning** for VLA policy
 learning.
@@ -50,15 +50,15 @@ pip install -r requirements.txt
 pip install -e .
 ```
 
-Note: the Python package namespace in this repository is still `starVLA`, so
-commands such as `from starVLA.training.train import main` are expected.
+Note: the Python package namespace in this repository is now `laravla`, so
+commands such as `from laravla.training.train import main` are expected.
 
 ## Quick Start
 
 ### 1) Basic check
 
 ```bash
-python -c "from starVLA.training.train import main; print('OK')"
+python -c "from laravla.training.train import main; print('OK')"
 ```
 
 ### 2) Single-stage training
@@ -66,13 +66,13 @@ python -c "from starVLA.training.train import main; print('OK')"
 Bridge:
 
 ```bash
-bash scripts/run_starvla_bridge.sh
+bash scripts/run_laravla_bridge.sh
 ```
 
 LIBERO:
 
 ```bash
-bash scripts/run_starvla_libero.sh
+bash scripts/run_laravla_libero.sh
 ```
 
 ### 3) Multi-stage training (4-stage curriculum)
@@ -113,8 +113,8 @@ Please refer to:
 ## Notes
 
 - Project name: `LaRA-VLA`
-- Code namespace: `starVLA/`
-- Main training entrypoint: `starVLA/training/train.py`
+- Code namespace: `laravla/`
+- Main training entrypoint: `laravla/training/train.py`
 - Most users should run scripts under `scripts/` directly.
 - If your local environment needs custom paths or settings, edit the script headers.
 

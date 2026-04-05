@@ -7,7 +7,7 @@ cd "${REPO_ROOT}" || exit 1
 export HF_HOME="${HF_HOME:-${REPO_ROOT}/qwen_cache}"
 
 # Default python interpreters (override via env vars).
-STAR_VLA_PYTHON="${STAR_VLA_PYTHON:-python}"
+LARAVLA_PYTHON="${LARAVLA_PYTHON:-python}"
 LIBERO_PYTHON="${LIBERO_PYTHON:-python}"
 
 # Default checkpoint (override by arg $1 or YOUR_CKPT).
@@ -26,7 +26,7 @@ require_python() {
   return 1
 }
 
-require_python "STAR_VLA_PYTHON" "${STAR_VLA_PYTHON}"
+require_python "LARAVLA_PYTHON" "${LARAVLA_PYTHON}"
 require_python "LIBERO_PYTHON" "${LIBERO_PYTHON}"
 
 CKPT_PATH="${1:-${YOUR_CKPT:-${DEFAULT_CKPT_PATH:-}}}"
@@ -147,7 +147,7 @@ trap cleanup EXIT
 wait_port_ready() {
   local port="$1"
   echo "⏳ Waiting for server to become ready: 127.0.0.1:${port}"
-  "${STAR_VLA_PYTHON}" - <<PY
+  "${LARAVLA_PYTHON}" - <<PY
 import os
 import sys
 import time
@@ -157,7 +157,7 @@ try:
 except Exception as e:
     print(
         "missing python dependency for port check: websockets (sync client). "
-        "Install it in STAR_VLA_PYTHON env, e.g. `pip install websockets>=11`.",
+        "Install it in the LARAVLA_PYTHON environment, e.g. `pip install websockets>=11`.",
         file=sys.stderr,
     )
     raise
@@ -198,7 +198,7 @@ start_server() {
   local log_file="${SERVER_LOG_DIR}/server_${port}.log"
   cleanup_port "${port}"
   echo "▶️  Starting server: GPU=${gpu_id} port=${port} log=${log_file}"
-  CUDA_VISIBLE_DEVICES="${gpu_id}" "${STAR_VLA_PYTHON}" deployment/model_server/server_policy.py \
+  CUDA_VISIBLE_DEVICES="${gpu_id}" "${LARAVLA_PYTHON}" deployment/model_server/server_policy.py \
     --ckpt_path "${CKPT_PATH}" \
     --port "${port}" \
     --use_bf16 \

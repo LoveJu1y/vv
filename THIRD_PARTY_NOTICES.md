@@ -1,9 +1,9 @@
 # Third-Party Notices
 
-This repository builds on the open-source StarVLA codebase. Many third-party
-notices preserved here are already present in that upstream base, and this file
-is intended to preserve and summarize those visible attributions in the current
-repository state.
+This repository builds on the open-source StarVLA codebase. The current public
+project identity is **LaRA-VLA**, while many third-party notices preserved here
+are already present in that upstream base. This file is intended to preserve
+and summarize those visible attributions in the current repository state.
 
 This repository is released under the MIT License at the repository root.
 However, individual files may carry their own third-party copyright or license
@@ -37,19 +37,19 @@ License:
 
 Local files that retain NVIDIA SPDX / Apache-2.0 headers:
 
-- `starVLA/dataloader/gr00t_lerobot/data_config.py`
-- `starVLA/dataloader/gr00t_lerobot/datasets.py`
-- `starVLA/dataloader/gr00t_lerobot/embodiment_tags.py`
-- `starVLA/dataloader/gr00t_lerobot/schema.py`
-- `starVLA/dataloader/gr00t_lerobot/video.py`
-- `starVLA/dataloader/gr00t_lerobot/transform/__init__.py`
-- `starVLA/dataloader/gr00t_lerobot/transform/base.py`
-- `starVLA/dataloader/gr00t_lerobot/transform/concat.py`
-- `starVLA/dataloader/gr00t_lerobot/transform/state_action.py`
-- `starVLA/dataloader/gr00t_lerobot/transform/video.py`
-- `starVLA/model/modules/action_model/flow_matching_head/__init__.py`
-- `starVLA/model/modules/action_model/flow_matching_head/action_encoder.py`
-- `starVLA/model/modules/action_model/flow_matching_head/cross_attention_dit.py`
+- `laravla/dataloader/gr00t_lerobot/data_config.py`
+- `laravla/dataloader/gr00t_lerobot/datasets.py`
+- `laravla/dataloader/gr00t_lerobot/embodiment_tags.py`
+- `laravla/dataloader/gr00t_lerobot/schema.py`
+- `laravla/dataloader/gr00t_lerobot/video.py`
+- `laravla/dataloader/gr00t_lerobot/transform/__init__.py`
+- `laravla/dataloader/gr00t_lerobot/transform/base.py`
+- `laravla/dataloader/gr00t_lerobot/transform/concat.py`
+- `laravla/dataloader/gr00t_lerobot/transform/state_action.py`
+- `laravla/dataloader/gr00t_lerobot/transform/video.py`
+- `laravla/model/modules/action_model/flow_matching_head/__init__.py`
+- `laravla/model/modules/action_model/flow_matching_head/action_encoder.py`
+- `laravla/model/modules/action_model/flow_matching_head/cross_attention_dit.py`
 
 Notes:
 
@@ -71,11 +71,11 @@ License:
 
 Local files that explicitly reference these upstreams:
 
-- `starVLA/model/modules/action_model/__init__.py`
-- `starVLA/model/modules/action_model/DiT_modules/diffusion_utils.py`
-- `starVLA/model/modules/action_model/DiT_modules/gaussian_diffusion.py`
-- `starVLA/model/modules/action_model/DiT_modules/respace.py`
-- `starVLA/model/modules/action_model/DiT_modules/timestep_sampler.py`
+- `laravla/model/modules/action_model/__init__.py`
+- `laravla/model/modules/action_model/DiT_modules/diffusion_utils.py`
+- `laravla/model/modules/action_model/DiT_modules/gaussian_diffusion.py`
+- `laravla/model/modules/action_model/DiT_modules/respace.py`
+- `laravla/model/modules/action_model/DiT_modules/timestep_sampler.py`
 
 Notes:
 
@@ -97,7 +97,7 @@ License:
 
 Local file:
 
-- `starVLA/model/modules/action_model/DiT_modules/models.py`
+- `laravla/model/modules/action_model/DiT_modules/models.py`
 
 Important note:
 
@@ -118,11 +118,11 @@ License:
 
 Local file:
 
-- `starVLA/model/modules/dino_model/dino_transforms.py`
+- `laravla/model/modules/dino_model/dino_transforms.py`
 
 Notes:
 
-- `starVLA/model/modules/dino_model/dino.py` is a local wrapper that loads
+- `laravla/model/modules/dino_model/dino.py` is a local wrapper that loads
   DINOv2 via `torch.hub`; it is not itself marked as a copied upstream file.
 
 ### 5. OpenVLA / Prismatic logging utility
@@ -138,7 +138,7 @@ License:
 
 Local file:
 
-- `starVLA/training/trainer_utils/overwatch.py`
+- `laravla/training/trainer_utils/overwatch.py`
 
 Notes:
 
@@ -155,8 +155,8 @@ repository snapshot. They should be reviewed before a stable public release.
 
 Files:
 
-- `starVLA/model/modules/action_model/GR00T_ActionHeader.py`
-- `starVLA/model/modules/action_model/LayerwiseFM_ActionHeader.py`
+- `laravla/model/modules/action_model/GR00T_ActionHeader.py`
+- `laravla/model/modules/action_model/LayerwiseFM_ActionHeader.py`
 
 Observed in local headers:
 
@@ -174,7 +174,7 @@ Recommended follow-up:
 
 File:
 
-- `starVLA/model/modules/action_model/DiTActionHeader.py`
+- `laravla/model/modules/action_model/DiTActionHeader.py`
 
 Observed in local header:
 

@@ -3,18 +3,16 @@ requires = ["setuptools"]
 build-backend = "setuptools.build_meta"
 
 [project]
-name = "starVLA"
+name = "LaRA-VLA"
 authors = [
-    {name = "Jinhui Ye", email="jinhuiyes@gmail.com"},
-    {name = "Fangjing Wang", email="fangjing_wang@outlook.com"},
-    {name = "Junqiu Yu", email="michaelyu1101@163.com"},
+    {name = "Jing Lyu", email="704074520@qq.com"},
 
 ]
-description = "StarVLA: A Lego-like Codebase for Vision-Language-Action Model Developing ."
+description = "LaRA-VLA: Latent Reasoning for Vision-Language-Action Models."
 version = "1.0.1"
 readme = "README.md"
 requires-python = ">=3.10"
-keywords = ["vision-language-actions models", " robotic manipulation", "multimodal pretraining", "robot learning", "generative models"]
+keywords = ["vision-language-action models", "robotic manipulation", "latent reasoning", "multimodal pretraining", "robot learning"]
 license = {file = "LICENSE"}
 classifiers = [
     "Development Status :: 3 - Alpha",
@@ -62,7 +60,7 @@ exclude = [
     "*.pyc",         # compiled Python file
     "*.pyo",          # optimized Python file
     "**bar**",
-    "starVLA/config",
+    "laravla/config",
 
 ]
 

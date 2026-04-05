@@ -10,7 +10,7 @@
 
 ### 已完成 / 已开始
 
-- 训练入口已经统一为 `starVLA/training/train.py`
+- 训练入口已经统一为 `laravla/training/train.py`
 - 启动脚本中的训练入口引用已经同步到 `train.py`
 - 仓库主线已经基本收敛到 **implicit latent reasoning** 模式
 - 已有一份配置/训练清理计划：[config_and_training_cleanup_plan.md](./config_and_training_cleanup_plan.md)
@@ -59,25 +59,25 @@
 1. 将所有脚本中的旧训练入口调用统一为 `train.py`
 2. 将代码注释、yaml 注释、文档中的旧入口描述统一切换为 `train`
 3. 检查 `__main__` 默认 `config_yaml` 是否仍指向已删除/不存在的旧配置
-4. 确认 `from starVLA.training.train import main` 可正常 import
+4. 确认 `from laravla.training.train import main` 可正常 import
 
 ### 涉及重点文件
 
 - `scripts/run_libero_multistage.sh`
 - `scripts/run_bridge_multistage.sh`
-- `scripts/run_starvla_libero.sh`
-- `scripts/run_starvla_bridge.sh`
+- `scripts/run_laravla_libero.sh`
+- `scripts/run_laravla_bridge.sh`
 - `docs/config_and_training_cleanup_plan.md`
-- `starVLA/config/training/*.yaml`
+- `laravla/config/training/*.yaml`
 - `README.md`
-- `starVLA/model/framework/QwenGR00T.py`
-- `starVLA/model/modules/vlm/QWen2_5.py`
-- `starVLA/dataloader/lerobot_datasets.py`
+- `laravla/model/framework/QwenGR00T.py`
+- `laravla/model/modules/vlm/QWen2_5.py`
+- `laravla/dataloader/lerobot_datasets.py`
 
 ### 验收标准
 
 - 仓库中不再残留旧训练入口名
-- 所有训练脚本均调用 `starVLA/training/train.py`
+- 所有训练脚本均调用 `laravla/training/train.py`
 
 ---
 
@@ -112,15 +112,15 @@
   - 固定 `LIBERO_HOME`
 - `examples/SimplerEnv/bridge_eval.sh`
   - 固定 python / 环境 / 路径
-- `starVLA/config/training/*.yaml`
+- `laravla/config/training/*.yaml`
   - `data_root_dir`
   - `cache_dir`
   - `steps_cache_path`
   - `wandb_entity`
 - `deployment/model_server/server_policy.py`
 - `examples/LIBERO/eval_libero.py`
-- `starVLA/dataloader/lerobot_datasets.py`
-- `starVLA/model/modules/vlm/QWen2_5.py`
+- `laravla/dataloader/lerobot_datasets.py`
+- `laravla/model/modules/vlm/QWen2_5.py`
 
 ### 建议输出
 
@@ -156,8 +156,8 @@
 
 ### 重点问题
 
-- README 仍引用 `train_starvla.py` / `train_internvla.py`
-- 若干 `__main__` 默认配置仍指向不存在的 `starvla_cotrain_oxe.yaml`
+- README 仍引用过时训练入口
+- 若干 `__main__` 默认配置仍指向不存在的 legacy config
 - yaml 注释仍混用旧入口名 / `cot_mode` 的历史描述
 
 ### 建议输出
@@ -240,12 +240,12 @@
    - 原始仓库链接
    - 修改说明
 6. 特别核查以下目录/文件：
-   - `starVLA/dataloader/gr00t_lerobot/*`
-   - `starVLA/model/modules/action_model/GR00T_ActionHeader.py`
-   - `starVLA/model/modules/action_model/LayerwiseFM_ActionHeader.py`
-   - `starVLA/model/modules/action_model/DiTActionHeader.py`
-   - `starVLA/model/modules/action_model/DiT_modules/models.py`
-   - `starVLA/training/trainer_utils/overwatch.py`
+   - `laravla/dataloader/gr00t_lerobot/*`
+   - `laravla/model/modules/action_model/GR00T_ActionHeader.py`
+   - `laravla/model/modules/action_model/LayerwiseFM_ActionHeader.py`
+   - `laravla/model/modules/action_model/DiTActionHeader.py`
+   - `laravla/model/modules/action_model/DiT_modules/models.py`
+   - `laravla/training/trainer_utils/overwatch.py`
 
 ### 重点提醒
 
@@ -282,8 +282,8 @@
 ### 最小建议测试集
 
 - `OmegaConf.load()` 三个训练 yaml
-- `from starVLA.training.train import main`
-- `from starVLA.model.framework import build_framework`
+- `from laravla.training.train import main`
+- `from laravla.model.framework import build_framework`
 - `BridgeReasoningFormatter` 的 stage 格式化行为
 - `QwenGR00T` fake sample smoke test
 

@@ -15,7 +15,7 @@ Main files:
 You usually need:
 
 - one trained checkpoint
-- one LaRA-VLA Python environment (the code package namespace remains `starVLA`)
+- one LaRA-VLA Python environment (the code package namespace is `laravla`)
 - one SimplerEnv Python environment
 - `SimplerEnv_PATH`
 
@@ -30,7 +30,7 @@ If this script succeeds, your SimplerEnv setup is likely usable.
 ## Recommended: Parallel Evaluation
 
 ```bash
-star_vla_python=/path/to/starvla/python \
+laravla_python=/path/to/laravla/python \
 sim_python=/path/to/simpler_env/python \
 SimplerEnv_PATH=/path/to/SimplerEnv \
 CUDA_VISIBLE_DEVICES=0,1,2,3 \
@@ -43,7 +43,7 @@ logs under the checkpoint directory unless `LOG_DIR` is overridden.
 ## Batch Evaluation for Many Checkpoints
 
 ```bash
-star_vla_python=/path/to/starvla/python \
+laravla_python=/path/to/laravla/python \
 sim_python=/path/to/simpler_env/python \
 SimplerEnv_PATH=/path/to/SimplerEnv \
 bash examples/SimplerEnv/run_all_ckpts_bridge.sh /abs/path/to/checkpoints

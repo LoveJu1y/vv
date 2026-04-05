@@ -13,21 +13,21 @@ Main files:
 You usually need:
 
 - one trained checkpoint
-- one LaRA-VLA Python environment (the code package namespace remains `starVLA`)
+- one LaRA-VLA Python environment (the code package namespace is `laravla`)
 - one LIBERO Python environment
 - `LIBERO_HOME`
 
 Useful checks:
 
 ```bash
-python -c "from starVLA.training.train import main; print('OK')"
+python -c "from laravla.training.train import main; print('OK')"
 python -c "from libero.libero import benchmark; print('OK')"
 ```
 
 ## Recommended: Parallel Evaluation
 
 ```bash
-STAR_VLA_PYTHON=/path/to/starvla/python \
+LARAVLA_PYTHON=/path/to/laravla/python \
 LIBERO_PYTHON=/path/to/libero/python \
 LIBERO_HOME=/path/to/LIBERO \
 CUDA_VISIBLE_DEVICES=0,1,2,3 \
@@ -45,10 +45,8 @@ Outputs are written under:
 ## Batch Evaluation for Many Checkpoints
 
 ```bash
-STAR_VLA_PYTHON=/path/to/starvla/python \
+LARAVLA_PYTHON=/path/to/laravla/python \
 LIBERO_PYTHON=/path/to/libero/python \
 LIBERO_HOME=/path/to/LIBERO \
 bash examples/LIBERO/run_all_ckpts_libero_all.sh /abs/path/to/checkpoints
 ```
-
-

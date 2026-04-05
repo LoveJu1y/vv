@@ -25,7 +25,7 @@ export HF_HOME="${HF_HOME:-${REPO_ROOT}/qwen_cache}"
 # ----------------------------------------------------------------------------
 # Base configuration
 # ----------------------------------------------------------------------------
-CONFIG_PATH="${CONFIG_PATH:-starVLA/config/training/bridge_lerobot_stage2.yaml}"
+CONFIG_PATH="${CONFIG_PATH:-laravla/config/training/bridge_lerobot_stage2.yaml}"
 RUN_ROOT_DIR="${RUN_ROOT_DIR:-results/BridgeLeRobot_VLM_Final_SDPA5}"
 RUN_ID_PREFIX="${RUN_ID_PREFIX:-bridge_multistage}"
 WANDB_PROJECT="${WANDB_PROJECT:-bridge_multistage_vlm_final_sdpa5}"
@@ -201,7 +201,7 @@ run_stage() {
     torchrun
     --nproc_per_node="${NUM_GPUS}"
     --master_port="${MASTER_PORT}"
-    starVLA/training/train.py
+    laravla/training/train.py
     --config_yaml "${CONFIG_PATH}"
     --run_root_dir "${RUN_ROOT_DIR}"
     --run_id "${run_id}"
