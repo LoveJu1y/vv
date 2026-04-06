@@ -1,6 +1,6 @@
 {
     "exclude": [
-      // "**/__pycache__",
+       "**/__pycache__",
       "checkpoints",
       "results",
       ".vscode",

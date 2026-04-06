@@ -17,12 +17,10 @@
 
 ### 当前主要阻塞项
 
-- 仓库内仍存在 **密钥、私有路径、内网/私有镜像默认值**
-- README 和若干脚本/注释仍有 **历史入口名和过时命令**
-- 若干文件存在 **debugpy / 0.0.0.0 调试入口**
-- 文档还没有形成对外统一主线，`examples/LIBERO/README.md` 目前为空
-- 第三方代码来源较多，但还没有 `NOTICE` / `THIRD_PARTY_NOTICES`
-- 还缺少最小 smoke test / CI，公开后稳定性会比较脆弱
+- Some repo-level planning docs still lag behind the current `laravla/` namespace
+- Final legal/provenance review is still pending
+- Release metadata and community files still need final cleanup
+- Minimal validation exists, but release-time consistency checks should still be documented
 
 ---
 
@@ -192,9 +190,7 @@
    - 跑 LIBERO / SimplerEnv
 4. 补齐空文档：
    - `examples/LIBERO/README.md`
-5. 重写不适合公开的内部文档：
-   - `deployment/readme-deployment.md`
-   - `deployment/model_server/README.md`
+5. Rewrite or remove internal-only documents that do not match the public release scope
 6. 增加 FAQ：
    - 数据不公开时如何使用
    - 如何替换 base VLM
@@ -208,9 +204,8 @@
 4. 快速开始
 5. 训练
 6. 评测
-7. 部署
-8. 数据与 checkpoint
-9. 限制与已知问题
+7. Data and checkpoint guidance
+8. Limitations and known issues
 
 ### 建议输出
 
@@ -219,8 +214,8 @@
 ### 验收标准
 
 - 外部用户仅通过 README 就能找到正确入口
-- `examples/LIBERO/README.md` 不再为空
-- 每个 example 目录至少有一份可执行说明
+- `examples/LIBERO/README.md` is no longer empty
+- each example directory has at least one usable README
 
 ---
 
@@ -250,7 +245,7 @@
 ### 重点提醒
 
 - 某些第三方文件头会引用“原仓库根目录的 LICENSE”
-- 当前仓库根目录是 StarVLA 的 MIT `LICENSE`
+- the repository root license and file-level third-party notices must remain consistent
 - 公开前必须确认这种再分发方式在法律和文档层面是自洽的
 
 ### 建议输出

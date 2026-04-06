@@ -13,6 +13,31 @@
 
 ---
 
+## Current Status
+
+As of the current repository state:
+
+- `R1` completed
+- `R2` completed
+- `R3` completed
+- `R4` completed
+- `R5` completed
+- `R6` partially completed
+- `R7` intentionally conservative; factual provenance is still preserved
+- `R8` partially completed
+
+Notes:
+
+- The active source tree has already moved from `starVLA/` to `laravla/`.
+- User-facing script names now use `run_laravla_*.sh`.
+- User-facing asset names now use `laravla_*`.
+- Remaining `StarVLA` occurrences are primarily:
+  - provenance / legal text
+  - this migration plan itself
+  - retained Hugging Face model IDs
+
+---
+
 ## 1. Naming Policy
 
 This migration should use the following naming rules consistently.
