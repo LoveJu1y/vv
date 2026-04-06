@@ -9,10 +9,6 @@ from pathlib import Path
 import requests
 import time
 
-# # 在 import libero/robosuite 前设置：无 EGL 时用 OSMesa 做离屏渲染，避免 "EGL PLATFORM_DEVICE extension" 报错
-# if not os.environ.get("MUJOCO_GL", "").strip():
-#     os.environ["MUJOCO_GL"] = "osmesa"
-
 import imageio
 import numpy as np
 import tqdm

@@ -11,7 +11,7 @@ RELOAD_MODULES=qwen_vl_interface
 mkdir -p results/Libero_VLA/libero_all_vla
 
 args=(
-  --config_yaml laravla/config/training/libero_all_ecot_stage4.yaml
+  --config_yaml laravla/config/training/libero.yaml
   --run_root_dir results/Libero_VLA
   --run_id libero_all_vla
   --wandb_project libero_vla

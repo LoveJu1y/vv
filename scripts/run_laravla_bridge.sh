@@ -6,11 +6,11 @@ export TOKENIZERS_PARALLELISM=false
 PRETRAINED_CKPT=
 RELOAD_MODULES=qwen_vl_interface
 
-# 若改 run_root_dir / run_id，请同步改下面 mkdir 路径（与 bridge_lerobot_stage2.yaml 默认一致）
+# 若改 run_root_dir / run_id，请同步改下面 mkdir 路径（与 bridge.yaml 默认一致）
 mkdir -p results/BridgeECOT/Bridge_VLA
 
 args=(
-  --config_yaml laravla/config/training/bridge_lerobot_stage2.yaml
+  --config_yaml laravla/config/training/bridge.yaml
   --run_root_dir results/BridgeECOT
   --run_id bridge_vla
   --wandb_project bridge_vla

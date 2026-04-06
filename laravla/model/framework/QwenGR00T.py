@@ -503,7 +503,7 @@ if __name__ == "__main__":
     from omegaconf import OmegaConf
     import argparse
     parser = argparse.ArgumentParser()
-    parser.add_argument("--config_yaml", type=str, default="./laravla/config/training/bridge_lerobot_stage2.yaml", help="Path to YAML config")
+    parser.add_argument("--config_yaml", type=str, default="./laravla/config/training/bridge.yaml", help="Path to YAML config")
     args, clipargs = parser.parse_known_args()
 
     cfg = OmegaConf.load(args.config_yaml)

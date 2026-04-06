@@ -1,14 +1,21 @@
 #!/usr/bin/env bash
 # 
 set -euo pipefail
+
+LARAVLA_PYTHON="${LARAVLA_PYTHON:-}"
+LIBERO_PYTHON="${LIBERO_PYTHON:-}"
+export LIBERO_HOME="${LIBERO_HOME:-}"
+
+export LIBERO_CONFIG_PATH="${LIBERO_HOME}/libero"
+
+
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_ROOT="$(cd "${SCRIPT_DIR}/../.." && pwd)"
 cd "${REPO_ROOT}" || exit 1
 export HF_HOME="${HF_HOME:-${REPO_ROOT}/qwen_cache}"
 
 # Default python interpreters (override via env vars).
-LARAVLA_PYTHON="${LARAVLA_PYTHON:-python}"
-LIBERO_PYTHON="${LIBERO_PYTHON:-python}"
+
 
 # Default checkpoint (override by arg $1 or YOUR_CKPT).
 DEFAULT_CKPT_PATH="${DEFAULT_CKPT_PATH:-}"
@@ -59,7 +66,7 @@ fi
 IFS=',' read -r -a CUDA_DEVICES <<< "${CUDA_VISIBLE_DEVICES}"
 NUM_GPUS="${#CUDA_DEVICES[@]}"
 
-LIBERO_HOME="${LIBERO_HOME:-}"
+
 if [[ -z "${LIBERO_HOME}" ]]; then
   echo "❌ Please set LIBERO_HOME, for example: LIBERO_HOME=/abs/path/to/LIBERO" >&2
   exit 1
@@ -68,8 +75,7 @@ if [[ ! -d "${LIBERO_HOME}" ]]; then
   echo "❌ LIBERO_HOME does not exist: ${LIBERO_HOME}" >&2
   exit 1
 fi
-export LIBERO_HOME
-export LIBERO_CONFIG_PATH="${LIBERO_CONFIG_PATH:-${LIBERO_HOME}/libero}"
+
 
 EVAL_PYTHONPATH="${REPO_ROOT}:${LIBERO_HOME}"
 if [[ -n "${PYTHONPATH:-}" ]]; then

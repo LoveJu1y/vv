@@ -8,7 +8,7 @@ set -euo pipefail
 export TOKENIZERS_PARALLELISM=false
 
 # ===================== 按需改这里 =====================
-CONFIG_YAML=laravla/config/training/libero_all_ecot_stage4.yaml
+CONFIG_YAML=laravla/config/training/libero.yaml
 RUN_ROOT=results/LiberoVLM
 RUN_ID_PREFIX=libero_vlm
 NUM_GPUS=8

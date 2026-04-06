@@ -50,8 +50,6 @@ pip install -r requirements.txt
 pip install -e .
 ```
 
-Note: the Python package namespace in this repository is now `laravla`, so
-commands such as `from laravla.training.train import main` are expected.
 
 ## Quick Start
 
@@ -61,21 +59,7 @@ commands such as `from laravla.training.train import main` are expected.
 python -c "from laravla.training.train import main; print('OK')"
 ```
 
-### 2) Single-stage training
-
-Bridge:
-
-```bash
-bash scripts/run_laravla_bridge.sh
-```
-
-LIBERO:
-
-```bash
-bash scripts/run_laravla_libero.sh
-```
-
-### 3) Multi-stage training (4-stage curriculum)
+### 2) Multi-stage training for VLM 
 
 Bridge:
 
@@ -89,34 +73,37 @@ LIBERO:
 bash scripts/run_libero_multistage.sh
 ```
 
+### 3) Single-stage training for VLA
+
+Bridge:
+
+```bash
+bash scripts/run_laravla_bridge.sh
+```
+
+LIBERO:
+
+```bash
+bash scripts/run_laravla_libero.sh
+```
+
+
 ## Evaluation
 
 ### LIBERO
 
-```bash
-bash examples/LIBERO/eval_libero_all.sh /abs/path/to/checkpoint.pt
-```
+Please refer to:
 
-Batch evaluation for multiple checkpoints:
-
-```bash
-bash examples/LIBERO/run_all_ckpts_libero_all.sh
-```
+- `/examples/LIBERO/README.md`
 
 ### SimplerEnv
 
 Please refer to:
 
 - `examples/SimplerEnv/README.md`
-- `examples/SimplerEnv/bridge_eval.sh`
 
-## Notes
 
-- Project name: `LaRA-VLA`
-- Code namespace: `laravla/`
-- Main training entrypoint: `laravla/training/train.py`
-- Most users should run scripts under `scripts/` directly.
-- If your local environment needs custom paths or settings, edit the script headers.
+
 
 ## Citation
 

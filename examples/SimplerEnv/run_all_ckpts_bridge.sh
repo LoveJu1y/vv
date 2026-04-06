@@ -20,12 +20,15 @@
 # ==========================================================================
 set -euo pipefail
 
-# Limit per-process CPU threads unless caller overrides
-# export OMP_NUM_THREADS=${OMP_NUM_THREADS:-1}
-# export MKL_NUM_THREADS=${MKL_NUM_THREADS:-1}
-# export NUMEXPR_NUM_THREADS=${NUMEXPR_NUM_THREADS:-1}
 
+#####you need to select your ckpt dir#############
 DEFAULT_CKPT_DIR=${DEFAULT_CKPT_DIR:-}
+#####you need to select your ckpt dir#############
+
+
+
+
+
 CKPT_DIR=${1:-${YOUR_CKPT_DIR:-${DEFAULT_CKPT_DIR:-}}}
 MIN_STEP_ARG=${2:-}
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"

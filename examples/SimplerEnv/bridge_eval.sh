@@ -17,9 +17,15 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_ROOT="$(cd "${SCRIPT_DIR}/../.." && pwd)"
 cd "${REPO_ROOT}"
 
-laravla_python="${laravla_python:-python}"
-sim_python="${sim_python:-python}"
+
+########you need to secect your python path######
+laravla_python="${laravla_python:-}"
+sim_python="${sim_python:-}"
 SimplerEnv_PATH="${SimplerEnv_PATH:-}"
+#######you need to secect your python path######
+
+
+DEFAULT_CKPT_PATH="${DEFAULT_CKPT_PATH:-}"
 export PYTHONPATH="${REPO_ROOT}:${PYTHONPATH:-}"
 export HF_HOME="${HF_HOME:-${REPO_ROOT}/qwen_cache}"
 
@@ -49,7 +55,7 @@ if [[ ! -d "${SimplerEnv_PATH}" ]]; then
 fi
 export SimplerEnv_PATH
 
-DEFAULT_CKPT_PATH="${DEFAULT_CKPT_PATH:-}"
+
 CKPT_PATH="${1:-${YOUR_CKPT:-${DEFAULT_CKPT_PATH:-}}}"
 if [[ -z "${CKPT_PATH}" ]]; then
   echo "❌ Please provide a checkpoint path, for example: bash $0 /abs/path/to/steps_10000_pytorch_model.pt"
