@@ -44,153 +44,12 @@ This repository builds on the open-source StarVLA codebase and focuses on
 **implicit latent reasoning** for VLA policy learning. The active code
 namespace in this repository is `laravla/`.
 
-## Results
+## NEWS
 
-### LIBERO
-
-<table style="border-collapse: collapse; width: 100%; text-align: center;">
-  <thead>
-    <tr style="border-bottom: 2px solid black;">
-      <th>CoT Type</th>
-      <th>Method</th>
-      <th>Spatial</th>
-      <th>Goal</th>
-      <th>Object</th>
-      <th>Long</th>
-      <th>Avg</th>
-    </tr>
-  </thead>
-  <tbody>
-    <!-- No CoT -->
-    <tr>
-      <td rowspan="3"><b>No CoT</b></td>
-      <td>OpenVLA (Kim et al., 2025b)</td>
-      <td>84.7</td><td>88.4</td><td>79.2</td><td>53.7</td><td>76.5</td>
-    </tr>
-    <tr>
-      <td>π₀ (Black et al., 2024)</td>
-      <td>96.8</td><td>98.8</td><td>95.8</td><td>85.2</td><td>94.2</td>
-    </tr>
-    <tr style="border-bottom: 2px solid black;">
-      <td>OpenVLA-OFT (Kim et al., 2025a)</td>
-      <td>97.6</td><td>98.4</td><td>97.9</td><td>94.5</td><td>97.1</td>
-    </tr>
-
-    <!-- Textual CoT -->
-    <tr>
-      <td rowspan="4"><b>Textual CoT</b></td>
-      <td>ThinkAct (Huang et al., 2025)</td>
-      <td>88.3</td><td>91.4</td><td>87.1</td><td>70.9</td><td>84.4</td>
-    </tr>
-    <tr>
-      <td>MolmoAct (Lee et al., 2025)</td>
-      <td>87.0</td><td>95.4</td><td>87.6</td><td>77.2</td><td>86.6</td>
-    </tr>
-    <tr>
-      <td>π₀.₅ (Intelligence et al., 2025)</td>
-      <td>98.8</td><td>98.2</td><td>98.0</td><td>92.4</td><td>96.8</td>
-    </tr>
-    <tr style="border-bottom: 2px solid black;">
-      <td>DeepThinkVLA (Yin et al., 2025)</td>
-      <td>99.0</td><td>96.6</td><td>96.4</td><td>96.2</td><td>97.0</td>
-    </tr>
-
-    <!-- Visual CoT -->
-    <tr>
-      <td rowspan="4"><b>Visual CoT</b></td>
-      <td>CoT-VLA (Zhao et al., 2025)</td>
-      <td>87.5</td><td>91.6</td><td>87.6</td><td>69.0</td><td>81.1</td>
-    </tr>
-    <tr>
-      <td>DreamVLA (Zhang et al., 2025b)</td>
-      <td>97.5</td><td>94.0</td><td>89.5</td><td>89.5</td><td>92.6</td>
-    </tr>
-    <tr>
-      <td>F1 (Lv et al., 2025)</td>
-      <td>98.2</td><td>97.8</td><td>95.4</td><td>91.3</td><td>95.7</td>
-    </tr>
-    <tr style="border-bottom: 2px solid black;">
-      <td>UD-VLA (Chen et al., 2025b)</td>
-      <td>94.1</td><td>95.7</td><td>91.2</td><td>89.6</td><td>92.7</td>
-    </tr>
-
-    <!-- Latent CoT -->
-    <tr>
-      <td rowspan="2"><b>Latent CoT</b></td>
-      <td>Fast-ThinkAct (Huang et al., 2026)</td>
-      <td>92.0</td><td>97.2</td><td>90.2</td><td>79.4</td><td>89.7</td>
-    </tr>
-    <tr>
-      <td><b>LaRA-VLA (Ours)</b></td>
-      <td>96.4</td><td>98.6</td><td>99.8</td><td>96.6</td><td><b>97.9</b></td>
-    </tr>
-  </tbody>
-</table>
-
-### Bridge
-
-<table style="border-collapse: collapse; width: 100%; text-align: center;">
-  <thead>
-    <tr style="border-bottom: 2px solid black;">
-      <th>CoT Type</th>
-      <th>Method</th>
-      <th>Put Spoon</th>
-      <th>Put Carrot</th>
-      <th>Stack Block</th>
-      <th>Put Eggplant</th>
-      <th>Avg</th>
-    </tr>
-  </thead>
-  <tbody>
-    <!-- No CoT -->
-    <tr>
-      <td rowspan="5"><b>No CoT</b></td>
-      <td>OpenVLA (Kim et al., 2025b)</td>
-      <td>0.0</td><td>0.0</td><td>0.0</td><td>4.1</td><td>1.0</td>
-    </tr>
-    <tr>
-      <td>Octo (Ghosh et al., 2024)</td>
-      <td>47.2</td><td>9.7</td><td>4.2</td><td>56.9</td><td>29.5</td>
-    </tr>
-    <tr>
-      <td>OpenVLA-OFT (Kim et al., 2025a)</td>
-      <td>12.5</td><td>4.2</td><td>8.3</td><td>37.5</td><td>39.6</td>
-    </tr>
-    <tr>
-      <td>π₀ (Black et al., 2024)</td>
-      <td>29.1</td><td>0.0</td><td>16.7</td><td>62.5</td><td>40.1</td>
-    </tr>
-    <tr style="border-bottom: 2px solid black;">
-      <td>CogACT (Li et al., 2024)</td>
-      <td>71.7</td><td>50.8</td><td>15.0</td><td>67.5</td><td>51.3</td>
-    </tr>
-
-    <!-- Textual CoT -->
-    <tr style="border-bottom: 2px solid black;">
-      <td><b>Textual CoT</b></td>
-      <td>ThinkAct (Huang et al., 2025)</td>
-      <td>58.3</td><td>37.5</td><td>8.7</td><td>70.8</td><td>43.8</td>
-    </tr>
-
-    <!-- Visual CoT -->
-    <tr>
-      <td rowspan="2"><b>Visual CoT</b></td>
-      <td>F1 (Lv et al., 2025)</td>
-      <td>50.0</td><td>70.8</td><td>50.0</td><td>66.7</td><td>59.4</td>
-    </tr>
-    <tr style="border-bottom: 2px solid black;">
-      <td>UD-VLA (Chen et al., 2025b)</td>
-      <td>58.3</td><td>62.5</td><td>54.1</td><td>75.0</td><td>62.5</td>
-    </tr>
-
-    <!-- Latent CoT -->
-    <tr>
-      <td><b>Latent CoT</b></td>
-      <td><b>LaRA-VLA (Ours)</b></td>
-      <td>95.8</td><td>62.5</td><td>25.0</td><td>91.7</td><td><b>68.8</b></td>
-    </tr>
-  </tbody>
-</table>
+- ✅ Training code is released.
+- ✅ Evaluation code is released.
+- ⏳ Pretrained model weights are not released yet.
+- ⏳ Training datasets are not released yet.
 
 ## Installation
 
@@ -250,12 +109,42 @@ bash scripts/run_laravla_libero.sh
 The LIBERO results above correspond to the evaluation workflow documented in
 [examples/LIBERO/README.md](examples/LIBERO/README.md).
 
+#### result
+
+| CoT Type | Method | Spatial | Goal | Object | Long | Avg |
+| --- | --- | ---: | ---: | ---: | ---: | ---: |
+| No CoT | OpenVLA (Kim et al., 2025b) | 84.7 | 88.4 | 79.2 | 53.7 | 76.5 |
+| No CoT | π₀ (Black et al., 2024) | 96.8 | 98.8 | 95.8 | 85.2 | 94.2 |
+| No CoT | OpenVLA-OFT (Kim et al., 2025a) | 97.6 | 98.4 | 97.9 | 94.5 | 97.1 |
+| Textual CoT | ThinkAct (Huang et al., 2025) | 88.3 | 91.4 | 87.1 | 70.9 | 84.4 |
+| Textual CoT | MolmoAct (Lee et al., 2025) | 87.0 | 95.4 | 87.6 | 77.2 | 86.6 |
+| Textual CoT | π₀.₅ (Intelligence et al., 2025) | 98.8 | 98.2 | 98.0 | 92.4 | 96.8 |
+| Textual CoT | DeepThinkVLA (Yin et al., 2025) | 99.0 | 96.6 | 96.4 | 96.2 | 97.0 |
+| Visual CoT | CoT-VLA (Zhao et al., 2025) | 87.5 | 91.6 | 87.6 | 69.0 | 81.1 |
+| Visual CoT | DreamVLA (Zhang et al., 2025b) | 97.5 | 94.0 | 89.5 | 89.5 | 92.6 |
+| Visual CoT | F1 (Lv et al., 2025) | 98.2 | 97.8 | 95.4 | 91.3 | 95.7 |
+| Visual CoT | UD-VLA (Chen et al., 2025b) | 94.1 | 95.7 | 91.2 | 89.6 | 92.7 |
+| Latent CoT | Fast-ThinkAct (Huang et al., 2026) | 92.0 | 97.2 | 90.2 | 79.4 | 89.7 |
+| Latent CoT | **LaRA-VLA (Ours)** | 96.4 | 98.6 | 99.8 | 96.6 | **97.9** |
 ### SimplerEnv
 
 The Bridge real-world results above are evaluated through the SimplerEnv-based
 pipeline documented in
 [examples/SimplerEnv/README.md](examples/SimplerEnv/README.md).
 
+#### result
+
+| CoT Type | Method | Put Spoon | Put Carrot | Stack Block | Put Eggplant | Avg |
+| --- | --- | ---: | ---: | ---: | ---: | ---: |
+| No CoT | OpenVLA (Kim et al., 2025b) | 0.0 | 0.0 | 0.0 | 4.1 | 1.0 |
+| No CoT | Octo (Ghosh et al., 2024) | 47.2 | 9.7 | 4.2 | 56.9 | 29.5 |
+| No CoT | OpenVLA-OFT (Kim et al., 2025a) | 12.5 | 4.2 | 8.3 | 37.5 | 39.6 |
+| No CoT | π₀ (Black et al., 2024) | 29.1 | 0.0 | 16.7 | 62.5 | 40.1 |
+| No CoT | CogACT (Li et al., 2024) | 71.7 | 50.8 | 15.0 | 67.5 | 51.3 |
+| Textual CoT | ThinkAct (Huang et al., 2025) | 58.3 | 37.5 | 8.7 | 70.8 | 43.8 |
+| Visual CoT | F1 (Lv et al., 2025) | 50.0 | 70.8 | 50.0 | 66.7 | 59.4 |
+| Visual CoT | UD-VLA (Chen et al., 2025b) | 58.3 | 62.5 | 54.1 | 75.0 | 62.5 |
+| Latent CoT | **LaRA-VLA (Ours)** | 95.8 | 62.5 | 25.0 | 91.7 | **68.8** |
 
 
 
