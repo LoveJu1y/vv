@@ -5,9 +5,12 @@
 </p>
 
 <p align="center">
-  Shuanghao Bai · Jing Lyu · Wanqi Zhou · Zhe Li · Dakai Wang · Lei Xing ·
-  Xiaoguang Zhao · Pengwei Wang · Zhongyuan Wang · Cheng Chi · Badong Chen ·
-  Shanghang Zhang
+  <a href="https://baishuanghao.github.io/">Shuanghao Bai</a> ·
+  <a href="https://scholar.google.com/citations?hl=vi&user=Th6JWCEAAAAJ">Jing Lyu</a> ·
+  Wanqi Zhou · Zhe Li · Dakai Wang · Lei Xing · Xiaoguang Zhao · Pengwei Wang ·
+  Zhongyuan Wang · Cheng Chi ·
+  <a href="https://scholar.google.com/citations?hl=en&user=mq6tPX4AAAAJ">Badong Chen</a> ·
+  <a href="https://scholar.google.com/citations?hl=en&user=voqw10cAAAAJ&view_op=list_works&sortby=pubdate">Shanghang Zhang</a>
 </p>
 
 
