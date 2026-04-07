@@ -5,12 +5,7 @@
 </p>
 
 <p align="center">
-  <a href="https://baishuanghao.github.io/">Shuanghao Bai</a> ·
-  <a href="https://scholar.google.com/citations?hl=vi&user=Th6JWCEAAAAJ">Jing Lyu</a> ·
-  Wanqi Zhou · Zhe Li · Dakai Wang · Lei Xing · Xiaoguang Zhao · Pengwei Wang ·
-  Zhongyuan Wang · Cheng Chi ·
-  <a href="https://scholar.google.com/citations?hl=en&user=mq6tPX4AAAAJ">Badong Chen</a> ·
-  <a href="https://scholar.google.com/citations?hl=en&user=voqw10cAAAAJ&view_op=list_works&sortby=pubdate">Shanghang Zhang</a>
+  <a href="https://baishuanghao.github.io/">Shuanghao Bai*</a>, <a href="https://scholar.google.com/citations?hl=vi&user=Th6JWCEAAAAJ">Jing Lyu*</a>, <a href="https://ellezwq.github.io/">Wanqi Zhou</a>, <a href="https://scholar.google.com/citations?user=U8f81zQAAAAJ&hl=zh-CN">Zhe Li</a>, <a href="">Dakai Wang</a>, <a href="https://scholar.google.com/citations?user=TlfrTOkAAAAJ&hl=en">Lei Xing</a>, <a href="https://people.ucas.ac.cn/~zhaoxiaoguang?language=en">Xiaoguang Zhao</a>, <a href="https://scholar.google.com/citations?hl=zh-CN&user=2xR6P5AAAAAJ">Pengwei Wang</a>, <a href="https://www.wangzhongyuan.com/">Zhongyuan Wang</a>, <a href="https://chicheng123.github.io/">Cheng Chi</a>, <a href="https://gr.xjtu.edu.cn/web/chenbd/home">Badong Chen</a>, <a href="https://pku-hmi-lab.github.io/HMI-Web/leader.html">Shanghang Zhang</a>
 </p>
 
 
