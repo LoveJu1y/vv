@@ -109,41 +109,41 @@ bash scripts/run_laravla_libero.sh
 The LIBERO results above correspond to the evaluation workflow documented in
 [examples/LIBERO/README.md](examples/LIBERO/README.md).
 
-#### result
+#### Results
 
 | CoT Type | Method | Spatial | Goal | Object | Long | Avg |
 | --- | --- | ---: | ---: | ---: | ---: | ---: |
 | No CoT | OpenVLA (Kim et al., 2025b) | 84.7 | 88.4 | 79.2 | 53.7 | 76.5 |
-| No CoT | π₀ (Black et al., 2024) | 96.8 | 98.8 | 95.8 | 85.2 | 94.2 |
-| No CoT | OpenVLA-OFT (Kim et al., 2025a) | 97.6 | 98.4 | 97.9 | 94.5 | 97.1 |
+|  | π₀ (Black et al., 2024) | 96.8 | 98.8 | 95.8 | 85.2 | 94.2 |
+|  | OpenVLA-OFT (Kim et al., 2025a) | 97.6 | 98.4 | 97.9 | 94.5 | 97.1 |
 | Textual CoT | ThinkAct (Huang et al., 2025) | 88.3 | 91.4 | 87.1 | 70.9 | 84.4 |
-| Textual CoT | MolmoAct (Lee et al., 2025) | 87.0 | 95.4 | 87.6 | 77.2 | 86.6 |
-| Textual CoT | π₀.₅ (Intelligence et al., 2025) | 98.8 | 98.2 | 98.0 | 92.4 | 96.8 |
-| Textual CoT | DeepThinkVLA (Yin et al., 2025) | 99.0 | 96.6 | 96.4 | 96.2 | 97.0 |
+|  | MolmoAct (Lee et al., 2025) | 87.0 | 95.4 | 87.6 | 77.2 | 86.6 |
+|  | π₀.₅ (Intelligence et al., 2025) | 98.8 | 98.2 | 98.0 | 92.4 | 96.8 |
+|  | DeepThinkVLA (Yin et al., 2025) | 99.0 | 96.6 | 96.4 | 96.2 | 97.0 |
 | Visual CoT | CoT-VLA (Zhao et al., 2025) | 87.5 | 91.6 | 87.6 | 69.0 | 81.1 |
-| Visual CoT | DreamVLA (Zhang et al., 2025b) | 97.5 | 94.0 | 89.5 | 89.5 | 92.6 |
-| Visual CoT | F1 (Lv et al., 2025) | 98.2 | 97.8 | 95.4 | 91.3 | 95.7 |
-| Visual CoT | UD-VLA (Chen et al., 2025b) | 94.1 | 95.7 | 91.2 | 89.6 | 92.7 |
+|  | DreamVLA (Zhang et al., 2025b) | 97.5 | 94.0 | 89.5 | 89.5 | 92.6 |
+|  | F1 (Lv et al., 2025) | 98.2 | 97.8 | 95.4 | 91.3 | 95.7 |
+|  | UD-VLA (Chen et al., 2025b) | 94.1 | 95.7 | 91.2 | 89.6 | 92.7 |
 | Latent CoT | Fast-ThinkAct (Huang et al., 2026) | 92.0 | 97.2 | 90.2 | 79.4 | 89.7 |
-| Latent CoT | **LaRA-VLA (Ours)** | 96.4 | 98.6 | 99.8 | 96.6 | **97.9** |
+|  | **LaRA-VLA (Ours)** | 96.4 | 98.6 | 99.8 | 96.6 | **97.9** |
 ### SimplerEnv
 
 The Bridge real-world results above are evaluated through the SimplerEnv-based
 pipeline documented in
 [examples/SimplerEnv/README.md](examples/SimplerEnv/README.md).
 
-#### result
+#### Results
 
 | CoT Type | Method | Put Spoon | Put Carrot | Stack Block | Put Eggplant | Avg |
 | --- | --- | ---: | ---: | ---: | ---: | ---: |
 | No CoT | OpenVLA (Kim et al., 2025b) | 0.0 | 0.0 | 0.0 | 4.1 | 1.0 |
-| No CoT | Octo (Ghosh et al., 2024) | 47.2 | 9.7 | 4.2 | 56.9 | 29.5 |
-| No CoT | OpenVLA-OFT (Kim et al., 2025a) | 12.5 | 4.2 | 8.3 | 37.5 | 39.6 |
-| No CoT | π₀ (Black et al., 2024) | 29.1 | 0.0 | 16.7 | 62.5 | 40.1 |
-| No CoT | CogACT (Li et al., 2024) | 71.7 | 50.8 | 15.0 | 67.5 | 51.3 |
+|  | Octo (Ghosh et al., 2024) | 47.2 | 9.7 | 4.2 | 56.9 | 29.5 |
+|  | OpenVLA-OFT (Kim et al., 2025a) | 12.5 | 4.2 | 8.3 | 37.5 | 39.6 |
+|  | π₀ (Black et al., 2024) | 29.1 | 0.0 | 16.7 | 62.5 | 40.1 |
+|  | CogACT (Li et al., 2024) | 71.7 | 50.8 | 15.0 | 67.5 | 51.3 |
 | Textual CoT | ThinkAct (Huang et al., 2025) | 58.3 | 37.5 | 8.7 | 70.8 | 43.8 |
 | Visual CoT | F1 (Lv et al., 2025) | 50.0 | 70.8 | 50.0 | 66.7 | 59.4 |
-| Visual CoT | UD-VLA (Chen et al., 2025b) | 58.3 | 62.5 | 54.1 | 75.0 | 62.5 |
+|  | UD-VLA (Chen et al., 2025b) | 58.3 | 62.5 | 54.1 | 75.0 | 62.5 |
 | Latent CoT | **LaRA-VLA (Ours)** | 95.8 | 62.5 | 25.0 | 91.7 | **68.8** |
 
 
