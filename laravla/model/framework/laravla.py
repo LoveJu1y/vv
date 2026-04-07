@@ -74,15 +74,15 @@ class Qwen_GR00T(LatentAnalysisMixin, baseframework):
 
         # Apply parameter freezing based on training stage
         if self.training_stage == "reasoning_only":
-            print(f"🔒 [Training Stage] reasoning_only mode - Freezing action_model parameters")
+            print(f"[Training Stage] reasoning_only mode - Freezing action_model parameters")
             for param in self.action_model.parameters():
                 param.requires_grad = False
         elif self.training_stage == "action_only":
-            print(f"🔒 [Training Stage] action_only mode - Freezing VLM parameters")
+            print(f"[Training Stage] action_only mode - Freezing VLM parameters")
             for param in self.qwen_vl_interface.parameters():
                 param.requires_grad = False
         else:
-            print(f"🔓 [Training Stage] full mode - All parameters trainable")
+            print(f"[Training Stage] full mode - All parameters trainable")
         
 
     def forward(
@@ -148,7 +148,6 @@ class Qwen_GR00T(LatentAnalysisMixin, baseframework):
         # Step 3: Compute losses based on training stage
         result = {}
 
-        # 预计算 img_next_loss（reasoning_only / full 需要；action_only 默认跳过）
         img_next_loss = None
         img_next_cfg = getattr(self.config.framework, "img_next", {}) if hasattr(self.config, "framework") else {}
         enable_img_next = img_next_cfg.get("enable", False)
@@ -275,7 +274,6 @@ class Qwen_GR00T(LatentAnalysisMixin, baseframework):
         else:
             result["total_loss"] = action_loss
 
-        # img_next 对齐损失（full/action_only 阶段，在上方预计算后合并）
         if (
             img_next_loss is not None
             and enable_img_next
@@ -318,7 +316,6 @@ class Qwen_GR00T(LatentAnalysisMixin, baseframework):
             logger.warning(f"[img_next_loss] mask reshape failed: {e}")
             return None
 
-        # Encode next images with Qwen3 visual encoder（先手动降采样到 target_res，再交给 processor 归一化）
         try:
             # 获取 processor
             proc = getattr(self.qwen_vl_interface, "processor", None)
@@ -388,8 +385,7 @@ class Qwen_GR00T(LatentAnalysisMixin, baseframework):
                             pixel_values=pixel_values, image_grid_thw=image_grid_thw
                         )
                 
-                # img_embeds 是 list, 每个元素是 [num_tokens, hidden_dim]
-                # 需要 stack 成 [B, num_tokens, hidden_dim]
+              
                 if isinstance(img_embeds, (list, tuple)):
                     feats = torch.stack([emb for emb in img_embeds], dim=0).to(device, dtype)
                 else:
@@ -399,11 +395,9 @@ class Qwen_GR00T(LatentAnalysisMixin, baseframework):
                     logger.warning("[img_next_loss] extracted features are empty")
                     return None
                 
-                # 确保 feats 是 [B, num_tokens, C]
                 if feats.dim() == 2:
                     feats = feats.unsqueeze(0)
 
-                # 只保留 2D 池化到 4x4（16 tokens），不做 1D 回退
                 grid_side = int(feats.shape[1] ** 0.5)
                 target_side = int(img_next_count ** 0.5)
                 if grid_side * grid_side != feats.shape[1] or target_side * target_side != img_next_count:
@@ -417,13 +411,12 @@ class Qwen_GR00T(LatentAnalysisMixin, baseframework):
             logger.warning(f"[img_next_loss] visual encoding failed: {e}")
             return None
 
-        # Apply fallback mask: skip samples without true next frame
         valid_mask = (~fallback_mask).float().view(-1, 1, 1)
         if valid_mask.sum() <= 0:
             return None
 
         l1 = torch.nn.functional.l1_loss(pred, target_feats, reduction="none")  # [B, tokens, C]
-        mask_full = valid_mask.expand_as(l1)  # broadcast到 token 和通道
+        mask_full = valid_mask.expand_as(l1)
         l1 = (l1 * mask_full).sum() / mask_full.sum()
         return l1
 
@@ -459,8 +452,6 @@ class Qwen_GR00T(LatentAnalysisMixin, baseframework):
 
         # Step 2: Forward pass
         if use_iterative_forward:
-            # ECOT mode: Use forward_latent for implicit reasoning with thinking tokens
-            # This performs multiple forward passes with KV-Cache and dynamic embedding updates
             with torch.autocast("cuda", dtype=torch.bfloat16):
                 vlm_outputs = self.qwen_vl_interface.forward_latent(
                     input_ids=qwen_inputs["input_ids"],
@@ -474,7 +465,7 @@ class Qwen_GR00T(LatentAnalysisMixin, baseframework):
                 # Optional: Log reasoning passes for debugging
                 num_passes = vlm_outputs.get('num_reasoning_passes', 0)
                 if num_passes > 0:
-                    logger.info(f"[ECOT] Completed {num_passes} reasoning passes in predict_action")
+                    logger.info(f" Completed {num_passes} reasoning passes in predict_action")
         else:
             # Baseline mode: Normal forward pass (no iterative reasoning)
             with torch.autocast("cuda", dtype=torch.bfloat16):

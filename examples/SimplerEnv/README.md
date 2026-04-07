@@ -19,6 +19,14 @@ You usually need:
 - one SimplerEnv Python environment
 - `SimplerEnv_PATH`
 
+To set up the environment, please first follow the official [SimplerEnv repository](https://github.com/simpler-env/SimplerEnv) to install the base simpler_env environment.
+
+Afterwards, inside the simpler_env environment, install the following dependencies:
+
+conda activate simpler_env
+pip install tyro matplotlib mediapy websockets msgpack
+pip install numpy==1.24.4
+
 Useful checks:
 
 ```bash

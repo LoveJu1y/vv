@@ -71,10 +71,9 @@ class _QWen3_VL_Interface(nn.Module):
         # alin qwen3 with qwen2.5
         self.model.config.hidden_size = self.model.config.text_config.hidden_size
 
-        # 检查是否启用隐式推理
+        
         enable_latent_reasoning = config.framework.get("enable_latent_reasoning", False)
         if enable_latent_reasoning:
-            # 添加 thinking tokens 并初始化 embeddings
             token_ids = self._add_thinking_tokens(self.processor.tokenizer, config)
             self.thinking_token_id = token_ids["thinking_token_id"]
             self.start_thinking_id = token_ids["start_thinking_id"]
@@ -86,7 +85,6 @@ class _QWen3_VL_Interface(nn.Module):
             self.start_thinking_id = None
             self.end_thinking_id = None
 
-        # 添加 img_next special token（用于下一帧对齐）
         img_next_cfg = getattr(config.framework, "img_next", {}) if hasattr(config, "framework") else {}
         enable_img_next = False
         try:
@@ -193,13 +191,11 @@ class _QWen3_VL_Interface(nn.Module):
         Returns:
             dict: Contains thinking_token_id, start_thinking_id, end_thinking_id
         """
-        # 1. 从配置中获取 thinking token 字符串
         latent_cfg = cfg.framework.get("latent_reasoning", {})
         thinking_token = latent_cfg.get("thinking_token", "<|thinking|>")
         start_token = latent_cfg.get("start_of_thinking_token", "<|start_of_thinking|>")
         end_token = latent_cfg.get("end_of_thinking_token", "<|end_of_thinking|>")
         
-        # 2. 检查 tokens 是否已存在
         existing_tokens = set(tokenizer.get_vocab().keys())
         tokens_to_add = []
         
@@ -210,24 +206,20 @@ class _QWen3_VL_Interface(nn.Module):
         if end_token not in existing_tokens:
             tokens_to_add.append(end_token)
         
-        # 3. 添加新 tokens 到 tokenizer
         if tokens_to_add:
             logger.info(f"Adding thinking tokens to tokenizer: {tokens_to_add}")
             tokenizer.add_tokens(tokens_to_add, special_tokens=True)
         
-        # 4. 调整模型 embedding 大小
         old_vocab_size = self.model.get_input_embeddings().weight.shape[0]
         new_vocab_size = len(tokenizer)
         if new_vocab_size > old_vocab_size:
             logger.info(f"Resizing model embeddings from {old_vocab_size} to {new_vocab_size}")
             self.model.resize_token_embeddings(new_vocab_size)
         
-        # 5. 获取 token IDs
         thinking_token_id = tokenizer.convert_tokens_to_ids(thinking_token)
         start_thinking_id = tokenizer.convert_tokens_to_ids(start_token)
         end_thinking_id = tokenizer.convert_tokens_to_ids(end_token)
         
-        # 验证 tokens 是否成功添加
         if thinking_token_id == tokenizer.unk_token_id:
             raise ValueError(f"Failed to add thinking token: {thinking_token}")
         if start_thinking_id == tokenizer.unk_token_id:
@@ -235,17 +227,14 @@ class _QWen3_VL_Interface(nn.Module):
         if end_thinking_id == tokenizer.unk_token_id:
             raise ValueError(f"Failed to add end thinking token: {end_token}")
         
-        # 6. 初始化新 token embeddings（使用已有 token 的 embedding 初始化）
         embeddings = self.model.get_input_embeddings()
         
-        # 选择初始化目标 token（使用 "<<" 或 pad_token，如果不存在则使用第一个普通 token）
         target_token = "<<"
         if target_token not in tokenizer.get_vocab():
             target_token = tokenizer.pad_token if tokenizer.pad_token else tokenizer.bos_token
         target_id = tokenizer.convert_tokens_to_ids(target_token)
         
         if target_id == tokenizer.unk_token_id:
-            # 如果目标 token 也不存在，使用第一个非特殊 token
             target_id = 0
             while target_id < len(tokenizer) and (
                 tokenizer.convert_ids_to_tokens(target_id).startswith("<") or
@@ -255,14 +244,11 @@ class _QWen3_VL_Interface(nn.Module):
         
         target_embedding = embeddings.weight.data[target_id].clone()
         
-        # 初始化新 tokens 的 embeddings
         for token_id in [thinking_token_id, start_thinking_id, end_thinking_id]:
-            if token_id < embeddings.weight.shape[0]:  # 确保索引有效
+            if token_id < embeddings.weight.shape[0]:
                 embeddings.weight.data[token_id] = target_embedding
         
-        # 7. 如果存在 LM head 且未与 embeddings 共享，也需要初始化
         if hasattr(self.model, 'lm_head') and self.model.lm_head is not None:
-            # 检查是否共享权重
             if not (hasattr(self.model, 'tie_word_embeddings') and self.model.tie_word_embeddings):
                 lm_head = self.model.lm_head
                 if hasattr(lm_head, 'weight'):
@@ -298,7 +284,6 @@ class _QWen3_VL_Interface(nn.Module):
             logger.info(f"Adding img_next token to tokenizer: {tokens_to_add}")
             tokenizer.add_tokens(tokens_to_add, special_tokens=True)
 
-        # Resize embeddings if vocab expanded
         old_vocab_size = self.model.get_input_embeddings().weight.shape[0]
         new_vocab_size = len(tokenizer)
         if new_vocab_size > old_vocab_size:
@@ -309,7 +294,6 @@ class _QWen3_VL_Interface(nn.Module):
         if img_next_token_id == tokenizer.unk_token_id:
             raise ValueError(f"Failed to add img_next token: {img_next_token}")
 
-        # Init embedding using a reference token
         embeddings = self.model.get_input_embeddings()
         target_token = "<<"
         if target_token not in tokenizer.get_vocab():
@@ -722,10 +706,7 @@ class _QWen3_VL_Interface(nn.Module):
         return generation_output
 
     def load_state_dict(self, state_dict, strict: bool = True):
-        """
-        Allow loading checkpoints that包含 visual_ema 权重，即便当前配置关闭了 teacher。
-        当 use_img_next_teacher=False 时，自动丢弃所有以 visual_ema 开头的键，避免 strict 加载失败。
-        """
+
         if not getattr(self, "use_img_next_teacher", True):
             pruned = {k: v for k, v in state_dict.items() if not k.startswith("visual_ema")}
             dropped = len(state_dict) - len(pruned)
@@ -898,7 +879,7 @@ class _QWen3_VL_Interface(nn.Module):
         # Replace with aligned input_ids and attention_mask (position_ids will be auto-computed by Qwen3-VL)
         batch_inputs["input_ids"] = input_ids
         batch_inputs["attention_mask"] = attention_mask
-        # 标记 img_next 位置，供下游自定义注意力/掩码使用（action suffix 追加后重新计算）
+
         img_next_id = getattr(self, "img_next_token_id", None)
         if img_next_id is not None:
             batch_inputs["img_next_mask"] = (input_ids == img_next_id).to(input_ids.dtype)

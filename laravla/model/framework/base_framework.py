@@ -31,8 +31,6 @@ from laravla.model.framework.__init__ import build_framework
 logger = initialize_overwatch(__name__)
 
 
-# PreTrainedModel, AutoModel, PretrainedConfig,  are so good, find sometime to study them
-# TODO @JinhuiYE find sometime to merge yaml config with transformer config
 
 class baseframework(PreTrainedModel):
     """
@@ -86,7 +84,7 @@ class baseframework(PreTrainedModel):
         config = dict_to_namespace(model_config)
         model_config = config
         model_config.trainer.pretrained_checkpoint = None
-        # FrameworkModel = cls(config=model_config, **kwargs) # TODO find cls by config
+        # FrameworkModel = cls(config=model_config, **kwargs)
         FrameworkModel = build_framework(cfg=model_config)
         # set for action un-norm
         FrameworkModel.norm_stats = norm_stats

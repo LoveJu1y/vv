@@ -220,7 +220,7 @@ def sync_bridge_reasoning_to_framework(cfg):
     _set("compute_language_loss", True)
 
 
-class ECOTVLATrainer(TrainerUtils):
+class LaRA_VLA_Trainer(TrainerUtils):
     def __init__(self, cfg, model, vla_train_dataloader, optimizer, lr_scheduler, accelerator):
         self.config = cfg
         self.model = model
@@ -590,7 +590,7 @@ def main(cfg) -> None:
 
     # create trainer
     # Run ECoT VLA Training
-    trainer = ECOTVLATrainer(
+    trainer = LaRA_VLA_Trainer(
         cfg=cfg,
         model=vla,
         vla_train_dataloader=vla_train_dataloader,

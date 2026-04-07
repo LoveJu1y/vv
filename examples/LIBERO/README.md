@@ -17,6 +17,15 @@ You usually need:
 - one LIBERO Python environment
 - `LIBERO_HOME`
 
+To set up the environment, please first follow the official [LIBERO repository](https://github.com/Lifelong-Robot-Learning/LIBERO) to install the base LIBERO environment.
+
+Common issue: LIBERO defaults to Python 3.8, but the syntax updates between 3.8 and 3.10 are substantial. We verified that using Python 3.10 avoids many issues.
+
+Afterwards, inside the LIBERO environment, install the following dependencies:
+```
+pip install tyro matplotlib mediapy websockets msgpack
+pip install numpy==1.24.4
+```
 Useful checks:
 
 ```bash

@@ -7,11 +7,11 @@ PRETRAINED_CKPT=
 RELOAD_MODULES=qwen_vl_interface
 
 # 若改 run_root_dir / run_id，请同步改下面 mkdir 路径（与 bridge.yaml 默认一致）
-mkdir -p results/BridgeECOT/Bridge_VLA
+mkdir -p results/Bridge/Bridge_VLA
 
 args=(
   --config_yaml laravla/config/training/bridge.yaml
-  --run_root_dir results/BridgeECOT
+  --run_root_dir results/Bridge
   --run_id bridge_vla
   --wandb_project bridge_vla
   --framework.training_stage full
